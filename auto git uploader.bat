@@ -27,7 +27,7 @@ if %errorlevel% neq 0 (
 :: ==============================
 :: SET USER
 :: ==============================
-git config --global user.name "aryanrajsinha8010s"
+git config --global user.name "aryanrajsinha8010"
 git config --global user.email "jnsfilterbot@gmail.com"
 
 :: ==============================

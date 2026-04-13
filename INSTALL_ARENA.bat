@@ -26,8 +26,8 @@ if %errorlevel% neq 0 (
 )
 
 :: 3. Clone the Repository
-set REPO_URL=https://github.com/aryanrajsinha8010/ai-study-arnea.git
-set TARGET_DIR=ai-study-arena
+set REPO_URL=https://github.com/aryanrajsinha8010/study-arena.git
+set TARGET_DIR=study-arena
 
 echo [1/3] Downloading the Arena from GitHub...
 if exist "%TARGET_DIR%" (
