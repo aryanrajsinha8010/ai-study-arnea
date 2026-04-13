@@ -10,40 +10,80 @@ export default function Home() {
   const [showDropdown, setShowDropdown] = useState(false);
   const [isTyping, setIsTyping] = useState(false);
   const [isValidSelection, setIsValidSelection] = useState(false);
+  const [loadingText, setLoadingText] = useState('Consulting the archives...');
   const navigate = useNavigate();
 
+  const loadingPhrases = [
+    'Consulting the archives...',
+    'Calibrating scholarship domains...',
+    'Searching the Digital Scriptorium...',
+    'Analyzing academic lineages...',
+    'Extracting scholarly insights...',
+    'Mapping the domain of focus...'
+  ];
+
+
+  // DISK-LESS DATASET: Hundreds of subjects embedded directly in the frontend for instant, zero-API filtering
+  const scholarDomains = [
+    // --- SCIENCE ---
+    "Physics", "Astrophysics", "Quantum Mechanics", "Nuclear Physics", "Particle Physics", "Theoretical Physics", "Thermodynamics",
+    "Chemistry", "Organic Chemistry", "Inorganic Chemistry", "Physical Chemistry", "Biochemistry", "Molecular Biology", "Genetics",
+    "Biology", "Marine Biology", "Evolutionary Biology", "Microbiology", "Botany", "Zoology", "Neuroscience", "Pharmacology",
+    "Earth Science", "Geology", "Paleontology", "Meteorology", "Oceanography", "Environmental Science", "Ecology", "Astronomy",
+    "Forensic Science", "Kinesiology", "Virology", "Immunology", "Biotechnology", "Nanotechnology",
+
+    // --- ENGINEERING ---
+    "Electrical Engineering", "Electronics", "Mechanical Engineering", "Civil Engineering", "Aerospace Engineering", "Chemical Engineering",
+    "Industrial Engineering", "Software Engineering", "Computer Science", "Bioengineering", "Materials Science", "Robotics", 
+    "Artificial Intelligence", "Cybersecurity", "Blockchain Technology", "Data Science", "Information Technology", "System Engineering",
+    "Environmental Engineering", "Structural Engineering", "Telecommunications", "Fluid Mechanics", "Mechatronics", "Automotive Engineering",
+    "Petroleum Engineering", "Energy Engineering", "Biomedical Engineering", "Embedded Systems",
+
+    // --- HISTORY ---
+    "Ancient History", "Medieval History", "Modern History", "World History", "Political History", "Military History", "Economic History",
+    "Art History", "History of Science", "Classical Civilizations", "Archaeology", "Anthropology", "Cultural Heritage", 
+    "Renaissance Studies", "Colonial History", "Contemporary History", "Intellectual History",
+
+    // --- GEOGRAPHY & SOCIAL ---
+    "Geography", "Human Geography", "Physical Geography", "Geopolitics", "Urban Planning", "Demography", "Climatology", "Cartography",
+    "Psychology", "Social Psychology", "Cognitive Science", "Developmental Psychology", "Sociology", "Social Work", "Criminology",
+    "Political Science", "International Relations", "Public Administration", "Economics", "Microeconomics", "Macroeconomics", "Econometrics",
+
+    // --- HUMANITIES & ARTS ---
+    "Philosophy", "Ethics", "Logic", "Epistemology", "Linguistics", "Literature", "English Literature", "Comparative Literature",
+    "Classical Literature", "Media Studies", "Communication Studies", "Film Studies", "Journalism", "Music Theory", "Visual Arts",
+    "Graphic Design", "Architecture", "Religious Studies", "Theology", "Education", "Pedagogy",
+
+    // --- MATHEMATICS ---
+    "Mathematics", "Pure Mathematics", "Applied Mathematics", "Calculus", "Linear Algebra", "Discrete Mathematics", "Topology",
+    "Probability and Statistics", "Number Theory", "Algebraic Geometry", "Game Theory", "Differential Equations",
+
+    // --- MEDICINE & LAW ---
+    "Medicine", "Anatomy", "Physiology", "Pathology", "Nursing", "Public Health", "Epidemiology", "Law", "International Law", "Constitutional Law"
+  ];
+
   useEffect(() => {
-    if (topic.trim().length < 2) {
+    if (topic.trim().length < 1) {
       setFilteredTopics([]);
       return;
     }
 
-    if (!showDropdown) return; // Don't search if they just selected one
+    if (!showDropdown) return;
 
-    setIsTyping(true);
-    const delayDebounceFn = setTimeout(async () => {
-      try {
-        const response = await fetch('http://localhost:3001/api/quiz/suggest-topics', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ query: topic })
-        });
-        const data = await response.json();
-        setFilteredTopics(data || []);
-      } catch (err) {
-        setFilteredTopics([]);
-      } finally {
-        setIsTyping(false);
-      }
-    }, 600); // 600ms debounce
-
-    return () => clearTimeout(delayDebounceFn);
+    // Filter instantly from our embedded dataset
+    const matches = scholarDomains
+      .filter(d => d.toLowerCase().includes(topic.toLowerCase()))
+      .sort((a, b) => a.indexOf(topic) - b.indexOf(topic)) // Better relevance
+      .slice(0, 8); // Show up to 8 for a richer menu
+    
+    setFilteredTopics(matches);
+    setIsTyping(false);
   }, [topic, showDropdown]);
 
   const handleTopicChange = (e) => {
     setTopic(e.target.value);
     setShowDropdown(true);
-    setIsValidSelection(false); // Reset validation since they typed something new
+    setIsValidSelection(true); // Allow immediate validation for manual typing
   };
 
   const selectTopic = (t) => {
@@ -55,11 +95,6 @@ export default function Home() {
   const handleStart = (e) => {
     e.preventDefault();
     if (!username || !topic) return;
-
-    if (!isValidSelection) {
-      alert("Please select a topic precisely from the AI-generated suggestions list to continue.");
-      return;
-    }
 
     // Connect socket if not connected
     if (!socket.connected) {
@@ -144,7 +179,7 @@ export default function Home() {
           {showDropdown && isTyping && (
             <div className="absolute z-50 w-full mt-2 bg-surface-container-high border border-outline-variant/30 rounded-sm shadow-2xl px-4 py-3 text-primary font-body text-sm italic flex items-center gap-3">
               <span className="w-4 h-4 border-2 border-primary border-t-transparent rounded-full animate-spin"></span>
-              Consulting the archives...
+              {loadingText}
             </div>
           )}
 
@@ -163,8 +198,8 @@ export default function Home() {
           )}
           
           {showDropdown && !isTyping && topic.trim().length >= 2 && filteredTopics.length === 0 && (
-            <div className="absolute z-50 w-full mt-2 bg-error-container/20 border border-error-container rounded-sm shadow-xl px-4 py-3 text-on-error-container font-body text-sm italic">
-              Unrecognized domain. Please enter a valid academic subject.
+            <div className="absolute z-50 w-full mt-2 bg-primary/10 border border-primary/30 rounded-sm shadow-xl px-4 py-3 text-on-surface font-body text-sm italic">
+              A unique domain. The Arena will adapt to your choice.
             </div>
           )}
         </div>

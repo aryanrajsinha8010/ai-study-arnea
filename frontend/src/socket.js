@@ -1,8 +1,9 @@
 import { io } from 'socket.io-client';
 
-// For local development, assuming backend runs on 3001
-const SOCKET_URL = 'http://localhost:3001';
+// For local development, backend runs on 5000
+const SOCKET_URL = 'http://localhost:5000';
 
 export const socket = io(SOCKET_URL, {
-  autoConnect: false, // We'll connect manually when the user joins
+  autoConnect: true, 
+  transports: ['websocket'] // Force websocket for reliability
 });

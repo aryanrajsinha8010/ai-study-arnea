@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { BrainCircuit, Loader2, CheckCircle2, XCircle } from 'lucide-react';
+import { socket } from '../socket';
 
 export default function QuizBattle() {
   const navigate = useNavigate();
@@ -12,6 +13,8 @@ export default function QuizBattle() {
   const [timeLeft, setTimeLeft] = useState(10);
   const [selectedOption, setSelectedOption] = useState(null);
   const [showAnswer, setShowAnswer] = useState(false);
+  const [opponentStats, setOpponentStats] = useState({ score: 0, answered: 0 });
+
 
   useEffect(() => {
     const data = JSON.parse(sessionStorage.getItem('roomData') || 'null');
@@ -22,7 +25,7 @@ export default function QuizBattle() {
     setRoomData(data);
 
     // Fetch AI questions
-    fetch('http://localhost:3001/api/quiz/generate', {
+    fetch('http://localhost:5000/api/quiz/generate', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ 
@@ -32,15 +35,28 @@ export default function QuizBattle() {
     })
     .then(res => res.json())
     .then(data => {
+      if (!Array.isArray(data) || data.length === 0) {
+        throw new Error('No questions returned from server');
+      }
       setQuestions(data);
       setLoading(false);
     })
     .catch(err => {
-      console.error(err);
-      // In a real app we might handle network errors differently.
-      // But the backend falls back automatically if OpenAI fails.
+      console.error('[QuizBattle] Failed to load questions:', err);
+      setLoading(false); // Prevent infinite loading spinner
     });
+
+    socket.on('opponent_update', (data) => {
+      setOpponentStats({ score: data.score, answered: data.answered });
+      // Persist opponent score so Result page can display the winner
+      sessionStorage.setItem('opponentStats', JSON.stringify({ score: data.score, answered: data.answered }));
+    });
+
+    return () => {
+      socket.off('opponent_update');
+    };
   }, [navigate]);
+
 
   useEffect(() => {
     if (loading || showAnswer || currentIdx >= questions.length) return;
@@ -55,11 +71,14 @@ export default function QuizBattle() {
   }, [timeLeft, loading, showAnswer, currentIdx, questions]);
 
   const handleAnswer = (option) => {
+    if (!questions[currentIdx]) return; // Guard against empty question state
     setSelectedOption(option);
     setShowAnswer(true);
 
     const isCorrect = option === questions[currentIdx].correctAnswer;
-    if (isCorrect) setScore(s => s + Math.max(10, timeLeft * 10)); // Reward quick answers
+    const pointsEarned = isCorrect ? Math.max(10, timeLeft * 10) : 0;
+    const newScore = score + pointsEarned; // Calculate once, use everywhere
+    if (isCorrect) setScore(newScore);
 
     setTimeout(() => {
       if (currentIdx + 1 < questions.length) {
@@ -68,9 +87,8 @@ export default function QuizBattle() {
         setShowAnswer(false);
         setTimeLeft(10);
       } else {
-        // End of quiz
-        const finalScore = isCorrect ? score + Math.max(10, timeLeft * 10) : score;
-        sessionStorage.setItem('finalScore', finalScore);
+        // End of quiz — save the already-computed score
+        sessionStorage.setItem('finalScore', newScore);
         navigate('/result');
       }
     }, 2000);
@@ -84,6 +102,23 @@ export default function QuizBattle() {
         <p className="font-body text-on-surface-variant text-lg italic flex items-center gap-3">
           Synthesizing trial bounds from deliberation <Loader2 size={18} className="animate-spin text-primary" />
         </p>
+      </div>
+    );
+  }
+
+  // Guard: no questions loaded (e.g. backend error)
+  if (!questions || questions.length === 0) {
+    return (
+      <div className="flex flex-col items-center justify-center animate-slide-up h-[60vh] gap-6">
+        <BrainCircuit size={64} strokeWidth={1} className="text-error-container opacity-80" />
+        <h2 className="font-serif text-3xl font-bold text-on-surface">The Archives Are Silent</h2>
+        <p className="font-body text-on-surface-variant text-lg italic">Failed to load quiz questions. Please try again.</p>
+        <button
+          onClick={() => navigate('/')}
+          className="mt-4 px-8 py-3 border border-primary text-primary font-serif hover:bg-primary/10 transition-colors rounded-sm"
+        >
+          Return to Scriptorium
+        </button>
       </div>
     );
   }
@@ -105,13 +140,25 @@ export default function QuizBattle() {
             TEST {currentIdx + 1} OF {questions.length}
           </div>
         </div>
-        <div className="text-right">
-          <div className="font-sans text-[10px] uppercase tracking-widest text-on-surface-variant mb-1">
-            Accumulated Prestige
+
+        {/* Competitor Status */}
+        <div className="flex gap-8">
+           <div className="text-right">
+            <div className="font-sans text-[10px] uppercase tracking-widest text-on-surface-variant mb-1">
+              {opponentStats.answered >= 5 ? 'Final Rank' : 'Opponent Score'}
+            </div>
+            <div className="font-serif text-2xl font-bold text-outline tracking-wider">{opponentStats.score}</div>
           </div>
-          <div className="font-serif text-3xl font-bold text-primary tracking-wider">{score}</div>
+          <div className="text-right">
+            <div className="font-sans text-[10px] uppercase tracking-widest text-on-surface-variant mb-1">
+              Your Prestige
+            </div>
+            <div className="font-serif text-3xl font-bold text-primary tracking-wider">{score}</div>
+          </div>
         </div>
       </div>
+
+
 
       {/* Progress & Timer (Scholar's Scroll) */}
       <div className="relative w-full h-1 bg-surface-container-highest mb-12 shadow-inner">

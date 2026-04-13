@@ -4,13 +4,13 @@ setlocal enabledelayedexpansion
 :: ==============================
 :: 🔧 EDIT THIS ONLY
 :: ==============================
-set REPO_URL=https://github.com/aryanrajsinha8010/study-arena.git
+set REPO_URL=https://github.com/aryanrajsinha8010/ai-study-arnea.git
+set SCRIPT_NAME=auto git uploader.bat
 
 echo.
-echo ===== SMART GITHUB UPLOADER (FINAL) =====
+echo ===== 🧠 SMART AI GITHUB UPLOADER =====
 echo.
 
-:: Go to this file's folder (your project)
 cd /d "%~dp0"
 
 :: ==============================
@@ -25,13 +25,32 @@ if %errorlevel% neq 0 (
 )
 
 :: ==============================
-:: SET USER (already done, but safe)
+:: SET USER
 :: ==============================
 git config --global user.name "aryanrajsinha8010s"
 git config --global user.email "jnsfilterbot@gmail.com"
 
 :: ==============================
-:: INIT REPO IF NEEDED
+:: CREATE .gitignore IF NOT EXISTS
+:: ==============================
+if not exist ".gitignore" (
+    echo Creating .gitignore...
+    (
+        echo %SCRIPT_NAME%
+        echo __pycache__/
+        echo *.log
+        echo *.tmp
+        echo node_modules/
+        echo .env
+        echo *.zip
+        echo *.rar
+        echo *.mp4
+        echo *.bin
+    ) > .gitignore
+)
+
+:: ==============================
+:: INIT REPO
 :: ==============================
 if not exist ".git" (
     echo Initializing repository...
@@ -41,20 +60,33 @@ if not exist ".git" (
 )
 
 :: ==============================
-:: PERFORMANCE OPTIMIZATION
+:: PERFORMANCE BOOST
 :: ==============================
 git config core.preloadindex true
 git config core.fscache true
 git config gc.auto 256
 
 :: ==============================
-:: ADD FILES
+:: CHECK LARGE FILES (>100MB)
 :: ==============================
-echo Scanning files...
-git add .
+echo Scanning for large files...
+for /r %%F in (*) do (
+    if %%~zF GTR 100000000 (
+        echo [WARNING] Large file detected: %%F
+    )
+)
 
 :: ==============================
-:: CHECK IF CHANGES EXIST
+:: ADD FILES
+:: ==============================
+echo Adding files...
+git add .
+
+:: Remove this script from staging (extra safety)
+git reset %SCRIPT_NAME% >nul 2>&1
+
+:: ==============================
+:: CHECK CHANGES
 :: ==============================
 git diff --cached --quiet
 if %errorlevel%==0 (
@@ -63,9 +95,11 @@ if %errorlevel%==0 (
 )
 
 :: ==============================
-:: COMMIT
+:: SMART COMMIT MESSAGE
 :: ==============================
-set msg=Auto Update - %date% %time%
+for /f %%i in ('git diff --cached --name-only ^| find /c /v ""') do set COUNT=%%i
+set msg=Updated !COUNT! files - %date% %time%
+
 echo Committing...
 git commit -m "!msg!"
 
@@ -77,7 +111,7 @@ git push -u origin main
 
 :END
 echo.
-echo ===== DONE 🚀 =====
+echo ===== 🚀 DONE (SMART MODE) =====
 echo.
 
 pause

@@ -1,94 +1,152 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Trophy, RefreshCcw, User, List } from 'lucide-react';
+import { Trophy, RefreshCcw, List, Swords, Crown, Shield } from 'lucide-react';
 import { socket } from '../socket';
 
 export default function Result() {
   const navigate = useNavigate();
   const [score, setScore] = useState(0);
+  const [opponentScore, setOpponentScore] = useState(0);
   const [username, setUsername] = useState('');
+  const [opponentName, setOpponentName] = useState('Opponent');
   const [roomData, setRoomData] = useState(null);
+  const [outcome, setOutcome] = useState(null); // 'win' | 'loss' | 'draw'
 
   useEffect(() => {
-    const finalScore = sessionStorage.getItem('finalScore') || 0;
+    const finalScore = parseInt(sessionStorage.getItem('finalScore') || '0', 10);
     const user = sessionStorage.getItem('username') || 'Unknown';
     const data = JSON.parse(sessionStorage.getItem('roomData') || '{}');
-    
-    setScore(Number(finalScore));
+    const opStats = JSON.parse(sessionStorage.getItem('opponentStats') || '{"score":0}');
+
+    const myScore = finalScore;
+    const oppScore = opStats.score || 0;
+    const opponent = data.players?.find(p => p !== user) || 'Opponent';
+
+    setScore(myScore);
+    setOpponentScore(oppScore);
     setUsername(user);
+    setOpponentName(opponent);
     setRoomData(data);
 
-    // In a full build, we would broadcast the score to the opponent
-    // and wait for their score to determine a winner.
-    // POST to Supabase Backend
+    if (myScore > oppScore) setOutcome('win');
+    else if (myScore < oppScore) setOutcome('loss');
+    else setOutcome('draw');
+
+    // Save to leaderboard
     if (finalScore && user !== 'Unknown') {
-      fetch('http://localhost:3001/api/leaderboard', {
+      fetch('http://localhost:5000/api/leaderboard/update', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json'
-        },
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           username: user,
           topic: data.topic || 'General Knowledge',
-          score: Number(finalScore)
+          score: myScore
         })
-      }).catch(err => console.error("Failed to save score:", err));
+      }).catch(err => console.error('Failed to save score:', err));
     }
   }, []);
 
   const handlePlayAgain = () => {
     sessionStorage.removeItem('roomData');
     sessionStorage.removeItem('finalScore');
-    socket.disconnect(); // clean up state
+    sessionStorage.removeItem('opponentStats');
+    sessionStorage.removeItem('chatHistory');
+    socket.disconnect();
     navigate('/');
   };
 
+  const outcomeConfig = {
+    win: {
+      icon: Crown,
+      label: 'Victory!',
+      sub: 'You outscored your rival. The archives acknowledge your dominance.',
+      bannerClass: 'from-yellow-500/20 via-primary-500/10 to-transparent',
+      badgeClass: 'bg-yellow-500/20 text-yellow-400 ring-yellow-500/40',
+    },
+    loss: {
+      icon: Shield,
+      label: 'Defeated',
+      sub: 'Your rival had the edge this time. Return, study harder, reclaim glory.',
+      bannerClass: 'from-blue-500/10 via-gray-700/10 to-transparent',
+      badgeClass: 'bg-blue-500/20 text-blue-400 ring-blue-500/30',
+    },
+    draw: {
+      icon: Swords,
+      label: 'A Draw!',
+      sub: 'Perfectly matched. The archives call it a stalemate.',
+      bannerClass: 'from-purple-500/15 via-gray-700/10 to-transparent',
+      badgeClass: 'bg-purple-500/20 text-purple-400 ring-purple-500/30',
+    },
+  };
+
+  const cfg = outcomeConfig[outcome] || outcomeConfig.draw;
+  const OutcomeIcon = cfg.icon;
+
   return (
-    <div className="w-full max-w-md glass-panel p-10 text-center animate-slide-up relative overflow-hidden">
-      {/* Background celebration flares */}
-      <div className="absolute top-0 inset-x-0 h-40 bg-gradient-to-b from-primary-500/20 to-transparent pointer-events-none" />
+    <div className="w-full max-w-lg glass-panel p-10 text-center animate-slide-up relative overflow-hidden">
+      {/* Background glow */}
+      <div className={`absolute top-0 inset-x-0 h-48 bg-gradient-to-b ${cfg.bannerClass} pointer-events-none`} />
 
-      <div className="inline-flex justify-center items-center w-24 h-24 rounded-full bg-yellow-500/20 text-yellow-400 mb-6 ring-4 ring-yellow-500/30">
-        <Trophy size={48} />
+      {/* Outcome Badge */}
+      <div className={`relative inline-flex justify-center items-center w-24 h-24 rounded-full mb-5 ring-4 ${cfg.badgeClass}`}>
+        <OutcomeIcon size={44} />
       </div>
 
-      <h1 className="text-4xl font-black tracking-tight mb-2 text-white">Battle Finished!</h1>
-      <p className="text-gray-400 mb-8">You survived the context arena.</p>
+      <h1 className="font-serif text-4xl font-bold tracking-tight mb-1 text-on-surface relative">
+        {cfg.label}
+      </h1>
+      <p className="text-on-surface-variant font-body text-sm mb-8 italic max-w-sm mx-auto relative">
+        {cfg.sub}
+      </p>
 
-      <div className="bg-gray-950/50 rounded-2xl p-6 mb-8 border border-gray-800 flex justify-between items-center">
-        <div className="flex items-center gap-3 text-left">
-          <div className="w-12 h-12 bg-gray-800 rounded-full flex items-center justify-center">
-            <User size={24} className="text-primary-400" />
-          </div>
-          <div>
-            <div className="text-sm font-bold text-white">{username}</div>
-            <div className="text-xs text-gray-500">{roomData?.topic}</div>
-          </div>
+      {/* Score Comparison */}
+      <div className="relative flex gap-3 mb-8">
+        {/* My score */}
+        <div className={`flex-1 rounded-sm p-5 border ${outcome === 'win' ? 'border-yellow-500/50 bg-yellow-500/5' : 'border-outline-variant/30 bg-surface-container'}`}>
+          <div className="font-sans text-[10px] uppercase tracking-widest text-on-surface-variant mb-2">You</div>
+          <div className="font-serif text-4xl font-bold text-primary mb-1">{score}</div>
+          <div className="font-sans text-xs text-on-surface-variant truncate">{username}</div>
+          {outcome === 'win' && <div className="mt-2 text-[10px] font-bold uppercase tracking-widest text-yellow-400">Winner ✦</div>}
         </div>
-        <div className="text-right">
-          <div className="text-xs font-bold text-gray-500 tracking-wider">SCORE</div>
-          <div className="text-3xl font-mono font-bold text-primary-400">{score}</div>
+
+        {/* Divider */}
+        <div className="flex flex-col items-center justify-center text-on-surface-variant font-serif font-bold text-lg px-1">
+          VS
+        </div>
+
+        {/* Opponent score */}
+        <div className={`flex-1 rounded-sm p-5 border ${outcome === 'loss' ? 'border-blue-500/40 bg-blue-500/5' : 'border-outline-variant/30 bg-surface-container'}`}>
+          <div className="font-sans text-[10px] uppercase tracking-widest text-on-surface-variant mb-2">Opponent</div>
+          <div className="font-serif text-4xl font-bold text-on-surface mb-1">{opponentScore}</div>
+          <div className="font-sans text-xs text-on-surface-variant truncate">{opponentName}</div>
+          {outcome === 'loss' && <div className="mt-2 text-[10px] font-bold uppercase tracking-widest text-blue-400">Winner ✦</div>}
         </div>
       </div>
 
-      <div className="flex flex-col gap-3">
+      {/* Topic pill */}
+      {roomData?.topic && (
+        <div className="mb-8">
+          <span className="font-sans text-[10px] uppercase tracking-widest text-primary border border-primary/30 bg-primary/5 px-4 py-2 rounded-sm">
+            {roomData.topic}
+          </span>
+        </div>
+      )}
+
+      {/* Actions */}
+      <div className="flex flex-col gap-3 relative">
         <button
           onClick={() => navigate('/leaderboard')}
-          className="w-full bg-primary-600 hover:bg-primary-500 text-white font-bold text-lg py-4 rounded-xl transition-all hover:scale-[1.02] active:scale-[0.98] flex items-center justify-center gap-2 shadow-xl shadow-primary-500/20"
+          className="w-full bg-primary/90 hover:bg-primary text-on-primary font-serif font-bold text-lg py-4 rounded-sm transition-all hover:scale-[1.02] active:scale-[0.98] flex items-center justify-center gap-2 shadow-lg shadow-primary/20"
         >
           <List size={20} /> View Leaderboard
         </button>
 
         <button
           onClick={handlePlayAgain}
-          className="w-full bg-gray-800 hover:bg-gray-700 text-white font-bold text-lg py-4 rounded-xl transition-all hover:scale-[1.02] active:scale-[0.98] flex items-center justify-center gap-2 border border-gray-700 hover:border-gray-600 shadow-xl"
+          className="w-full bg-surface-container hover:bg-surface-container-high text-on-surface font-serif font-bold text-lg py-4 rounded-sm transition-all hover:scale-[1.02] active:scale-[0.98] flex items-center justify-center gap-2 border border-outline-variant/40 hover:border-outline-variant"
         >
           <RefreshCcw size={20} /> Play Again
         </button>
-      </div>
-
-      <div className="mt-6 text-xs text-gray-500">
-        Results evaluated by standard local heuristics.
       </div>
     </div>
   );

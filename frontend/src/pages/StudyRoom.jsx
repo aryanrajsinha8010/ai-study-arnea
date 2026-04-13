@@ -8,7 +8,9 @@ export default function StudyRoom() {
   const [roomData, setRoomData] = useState(null);
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState('');
-  const [timeLeft, setTimeLeft] = useState(30); // MVP: 30s quick study
+  const [timeLeft, setTimeLeft] = useState(30);
+  const [isBotTyping, setIsBotTyping] = useState(false);
+
   const messagesEndRef = useRef(null);
 
   useEffect(() => {
@@ -20,12 +22,20 @@ export default function StudyRoom() {
     setRoomData(data);
     setTimeLeft(data.duration || 30);
 
+    // CRITICAL: Join the socket room so we can send/receive messages
+    socket.emit('join_room', { 
+      roomId: data.roomId, 
+      username: sessionStorage.getItem('username'), 
+      topic: data.topic 
+    });
+
     // Initial bot message intro
     setMessages([
       { sender: 'System', message: `Welcome to the Study Room: ${data.topic}. You have ${data.duration} seconds to discuss and learn!`, timestamp: Date.now(), isSystem: true }
     ]);
 
     socket.on('receive_message', (msg) => {
+      setIsBotTyping(false); // Clear typing when message arrives
       setMessages(prev => {
         const newMsgs = [...prev, msg];
         sessionStorage.setItem('chatHistory', JSON.stringify(newMsgs));
@@ -34,14 +44,21 @@ export default function StudyRoom() {
       scrollToBottom();
     });
 
+    socket.on('bot_typing', () => {
+      setIsBotTyping(true);
+      setTimeout(() => setIsBotTyping(false), 3000); // Auto-hide after 3s
+    });
+
     socket.on('quiz_starting', () => {
       navigate('/battle');
     });
 
     return () => {
       socket.off('receive_message');
+      socket.off('bot_typing');
       socket.off('quiz_starting');
     };
+
   }, [navigate]);
 
   useEffect(() => {
@@ -78,7 +95,9 @@ export default function StudyRoom() {
 
   if (!roomData) return null;
 
-  const opponent = roomData.players.find(p => p !== sessionStorage.getItem('username')) || 'Opponent';
+  const currentUsername = sessionStorage.getItem('username');
+  const players = roomData.players || [currentUsername, 'Scholar AI'];
+  const opponent = players.find(p => p !== currentUsername) || 'Scholar AI';
 
   return (
     <div className="w-full max-w-4xl h-[80vh] flex flex-col glass-panel animate-slide-up overflow-hidden border border-outline-variant/30 scholar-shadow">
@@ -141,7 +160,15 @@ export default function StudyRoom() {
             </div>
           )
         })}
+        {isBotTyping && (
+          <div className="flex justify-start">
+            <div className="bg-surface-container-low text-on-surface-variant px-5 py-3 italic text-sm animate-pulse border-r-2 border-outline-variant/30 font-body">
+              Scholar {opponent} is composing a thought...
+            </div>
+          </div>
+        )}
         <div ref={messagesEndRef} />
+
       </div>
 
       {/* Input Area */}

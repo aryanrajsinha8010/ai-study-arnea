@@ -19,20 +19,38 @@ export default function Matchmaking() {
     // Ping the server to find a match
     socket.emit('find_match', { username, topic });
 
+    // FAIL-SAFE: If no match found in 5 seconds, force proceed
+    const failSafeTimer = setTimeout(() => {
+      console.log("[Matchmaking] Fail-safe triggered - manual match initiated.");
+      handleMatch({ 
+        roomId: `fail_safe_${Math.random().toString(36).substring(7)}`, 
+        topic, 
+        players: [username, 'AI Scholar'],
+        opponent: 'AI Scholar', 
+        persona: 'The Analytical Monk' 
+      });
+    }, 5000);
+
     // Listen for match
-    const handleMatch = (roomData) => {
-      setStatus('Match Found!');
-      sessionStorage.setItem('roomData', JSON.stringify(roomData));
+    function handleMatch(roomData) {
+      clearTimeout(failSafeTimer); // Cancel fail-safe if server responds
       
-      // Delay so user can see "Match Found!" before jumping
+      // Small artificial delay for immersion
       setTimeout(() => {
-        navigate('/study');
-      }, 1000);
-    };
+        setStatus('Match Found!');
+        sessionStorage.setItem('roomData', JSON.stringify(roomData));
+        
+        // Delay so user can see "Match Found!" before jumping
+        setTimeout(() => {
+          navigate('/study');
+        }, 800);
+      }, 1000); 
+    }
 
     socket.on('match_found', handleMatch);
 
     return () => {
+      clearTimeout(failSafeTimer);
       socket.off('match_found', handleMatch);
     };
   }, [navigate]);

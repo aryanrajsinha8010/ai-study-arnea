@@ -6,16 +6,19 @@ export default function Leaderboard() {
   const navigate = useNavigate();
   const [leaders, setLeaders] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(false);
 
   useEffect(() => {
-    fetch('http://localhost:3001/api/leaderboard')
+    fetch('http://localhost:5000/api/leaderboard')
       .then(res => res.json())
       .then(data => {
-        setLeaders(data);
+        // Guard: API must return an array
+        setLeaders(Array.isArray(data) ? data : []);
         setLoading(false);
       })
       .catch(err => {
-        console.error(err);
+        console.error('[Leaderboard] Fetch error:', err);
+        setError(true);
         setLoading(false);
       });
   }, []);
@@ -38,6 +41,10 @@ export default function Leaderboard() {
         <div className="flex justify-center py-12">
           <Loader2 size={32} className="animate-spin text-primary-500" />
         </div>
+      ) : error ? (
+        <div className="text-center py-12 text-red-400">
+          Failed to load leaderboard. Is the backend running?
+        </div>
       ) : leaders.length === 0 ? (
         <div className="text-center py-12 text-gray-500">
           No battles fought yet. Be the first!
@@ -45,8 +52,8 @@ export default function Leaderboard() {
       ) : (
         <div className="flex flex-col gap-3">
           {leaders.map((leader, i) => (
-            <div 
-              key={leader.id} 
+            <div
+              key={leader.id ?? `leader-${i}`}
               className={`flex items-center justify-between p-4 rounded-xl border ${
                 i === 0 ? 'bg-yellow-500/10 border-yellow-500/30' :
                 i === 1 ? 'bg-gray-300/10 border-gray-300/20' :

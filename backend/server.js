@@ -1,378 +1,218 @@
-import 'dotenv/config';
 import express from 'express';
-import http from 'http';
-import { Server } from 'socket.io';
 import cors from 'cors';
-import { generateQuiz, suggestTopics } from './quizController.js';
-import { saveScore, getLeaderboard } from './leaderboardController.js';
+import { createServer } from 'http';
+import { Server } from 'socket.io';
+import 'dotenv/config';
+import OpenAI from 'openai';
 
+import quizRouter from './routes/quizRoutes.js';
+import leaderboardRouter from './routes/leaderboardRouter.js';
 
-// ─────────────────────────────────────────────
-//  Bot Persona & Reply Engine
-// ─────────────────────────────────────────────
-const BOT_NAMES = ['Aryan', 'Priya', 'Rohan', 'Sneha', 'Dev', 'Kriti', 'Nikhil', 'Isha'];
-
-// Each room with a bot gets a fixed persona for the session
-const botPersonas = new Map(); // roomId → { name, typingSpeed }
-
-function getBotPersona(roomId) {
-  if (!botPersonas.has(roomId)) {
-    botPersonas.set(roomId, {
-      name: BOT_NAMES[Math.floor(Math.random() * BOT_NAMES.length)],
-      typingSpeed: 800 + Math.random() * 1200, // 0.8s – 2.0s delay
-    });
-  }
-  return botPersonas.get(roomId);
-}
-
-// Helpers
-function pick(arr) {
-  return arr[Math.floor(Math.random() * arr.length)];
-}
-function sometimes(prob = 0.4) {
-  return Math.random() < prob;
-}
-
-// Topic-aware study phrases
-const TOPIC_LINES = {
-  'computer science': [
-    'yeah CS is wild — are you more into theory or systems?',
-    'I was just reviewing Big O stuff, honestly tricky',
-    'so like, do you prefer frontend or backend kinda stuff?',
-    'OOP vs functional always gets me lol',
-    'have you done any DSA prep yet?',
-  ],
-  'mathematics': [
-    'math is honestly brutal but satisfying when it clicks',
-    'which part — calculus, linear algebra, or stats?',
-    'I always mess up integration by parts 😅',
-    'proofs are pain honestly',
-    'are you studying for an exam or just curious?',
-  ],
-  'physics': [
-    'physics is basically just math with a story lol',
-    'which chapter? thermodynamics always confuses me',
-    'i still can\'t visualize magnetic field lines properly',
-    'quantum stuff is interesting but my brain hurts',
-    'what level are you at — high school or uni?',
-  ],
-  'biology': [
-    'bio has so much memorization omg',
-    'are you into molecular bio or ecology type stuff?',
-    'cell signalling pathways are honestly wild',
-    'I always mix up meiosis and mitosis in exams',
-    'evolution stuff is actually pretty interesting tbh',
-  ],
-  'history': [
-    'history is lowkey interesting once you see the patterns',
-    'which era? ancient, medieval, or modern?',
-    'colonialism and its effects are definitely worth discussing',
-    'I feel like history keeps repeating itself ngl',
-    'which country/region are you focused on?',
-  ],
-  'general knowledge': [
-    'gk is broad — which area are you focused on?',
-    'I usually brush up on current affairs before quizzes',
-    'science or geography or polity?',
-    'random fact: the shortest war in history was 38 minutes',
-    'what\'s a topic you feel weak on?',
-  ],
-};
-
-function getTopicLine(topic) {
-  if (!topic) return null;
-  const key = topic.toLowerCase();
-  for (const [t, lines] of Object.entries(TOPIC_LINES)) {
-    if (key.includes(t)) return pick(lines);
-  }
-  return null;
-}
-
-// Main reply generator
-function generateBotReply(message, roomId) {
-  const persona = getBotPersona(roomId);
-  const lower = message.trim().toLowerCase();
-
-  // ── Greetings ──────────────────────────────
-  if (/^(hi+|hey+|hello+|heyy+|hiii+|yo+|sup|hola)\b/.test(lower)) {
-    return pick([
-      `hey! 👋 ready to grind?`,
-      `hi hi! finally someone to study with lol`,
-      `heyy! hope you're not as stressed as I am 😅`,
-      `yo! what's up`,
-    ]);
-  }
-
-  // ── Who are you / name ─────────────────────
-  if (/who (are|r) (you|u)|what('?s| is) your name|ur name/.test(lower)) {
-    return pick([
-      `lol I'm ${persona.name} — you?`,
-      `name's ${persona.name}. been on this app for like a week now`,
-      `${persona.name} here! studying for an exam tbh`,
-      `call me ${persona.name} 😄`,
-    ]);
-  }
-
-  // ── Are you a bot / AI ─────────────────────
-  if (/are you (a )?(bot|ai|robot|fake|real)/.test(lower) || /r u a bot/.test(lower)) {
-    return pick([
-      `lmao no?? I'm literally just trying to study 😭`,
-      `bro what 💀 I'm as real as it gets`,
-      `nah I'm ${persona.name}, just a student like you`,
-      `haha why would I be a bot, I'm just here to not fail my exam`,
-    ]);
-  }
-
-  // ── How are you ───────────────────────────
-  if (/how (are|r) (you|u)|what'?s up|how'?s it going/.test(lower)) {
-    return pick([
-      `stressed but here 🫠 you?`,
-      `honestly tired but let's do this`,
-      `decent! been studying since morning tho 💀`,
-      `good! a little nervous about the quiz tbh`,
-    ]);
-  }
-
-  // ── Okay / Okay cool / Alright ─────────────
-  if (/^(ok+|okay+|alright|sure|lol|haha|nice|cool|wow|damn|ikr|true|fr|facts)/.test(lower)) {
-    return pick([
-      `haha yeah`,
-      `right?`,
-      `exactly lol`,
-      `for real`,
-      `same tbh`,
-      `😂 yep`,
-    ]);
-  }
-
-  // ── Questions ending with ? ────────────────
-  if (lower.includes('?')) {
-    // Subject-specific questions
-    if (lower.includes('when') || lower.includes('where') || lower.includes('what year')) {
-      return pick([
-        `hmm let me think… honestly not sure lol`,
-        `that's a good question, I was just trying to remember too`,
-        `I think I read about it but blanked 😅 what do you remember?`,
-      ]);
-    }
-    if (lower.includes('how') && (lower.includes('work') || lower.includes('does'))) {
-      return pick([
-        `so basically the way I understand it is… you explain it better lol`,
-        `I have a rough idea but I always mess it up somewhere in the middle`,
-        `from what I recall it's like a chain of steps — the details escape me though`,
-      ]);
-    }
-    if (lower.includes('do you know') || lower.includes('you know')) {
-      return pick([
-        `I think so? but i might be wrong`,
-        `kinda yeah, not 100% though`,
-        `I've heard about it, remind me what part you mean`,
-      ]);
-    }
-    return pick([
-      `hmm good point, what do you think?`,
-      `honestly I'm not sure either 😅`,
-      `that's exactly what I was wondering too`,
-      `let me think… I'll come back to that one lol`,
-      `depends I guess? what's your take`,
-    ]);
-  }
-
-  // ── Struggle / Difficulty ──────────────────
-  if (/don'?t (know|understand|get)|confus|hard|difficult|struggle|stuck|help/.test(lower)) {
-    return pick([
-      `same omg, this topic is no joke`,
-      `I feel you, took me a while to get it too`,
-      `honestly relatable 😭 we can figure it out together`,
-      `yeah it's tricky — maybe we try a different approach?`,
-      `don't stress, at least we have the quiz after to test ourselves lol`,
-    ]);
-  }
-
-  // ── Agreement / understanding ──────────────
-  if (/i (know|agree|get it|understand|think so|feel|see)|makes sense|exactly/.test(lower)) {
-    return pick([
-      `right?? glad I'm not the only one`,
-      `yes! finally someone that agrees`,
-      `exactly, that's what I was thinking`,
-      `100%`,
-      `yeah we're on the same page then`,
-    ]);
-  }
-
-  // ── Quiz mention ───────────────────────────
-  if (/quiz|test|exam|result|score/.test(lower)) {
-    return pick([
-      `ugh the quiz is coming up fast 😬`,
-      `hope I don't blank on the quiz tbh`,
-      `let's see how we do! trying to stay positive lol`,
-      `I feel semi-ready? we'll see`,
-      `okay quiz mode engaged 🎯`,
-    ]);
-  }
-
-  // ── Random filler / general study talk ─────
-  const fillers = [
-    `yeah I feel like this topic has so many layers`,
-    `I keep second-guessing myself on stuff like this lol`,
-    `honestly same, took me a few tries to get it`,
-    `let's see if we both remembered it right in the quiz 😅`,
-    `good point — I hadn't thought of it that way`,
-    `I usually try to relate it to real life, makes it stick better`,
-    `I made notes on this but I literally have not opened them yet 💀`,
-    `we're in this together at least haha`,
-    `okay okay that's actually a good way to think about it`,
-    `I should've studied more before coming here ngl`,
-    `are you feeling ready for the quiz?`,
-  ];
-
-  return pick(fillers);
-}
-
-// ─────────────────────────────────────────────
-//  Express + Socket.IO setup
-// ─────────────────────────────────────────────
 const app = express();
+const httpServer = createServer(app);
+const io = new Server(httpServer, {
+  cors: {
+    origin: '*',
+  },
+});
+
 app.use(cors());
 app.use(express.json());
 
-app.post('/api/quiz/generate', generateQuiz);
-app.post('/api/quiz/suggest-topics', suggestTopics);
-app.post('/api/leaderboard', saveScore);
-app.get('/api/health', (req, res) => res.json({ status: 'ok' }));
-app.get('/api/leaderboard', getLeaderboard);
-
-
-const server = http.createServer(app);
-const io = new Server(server, {
-  cors: { origin: '*' },
+// ── OpenRouter Client (Chat) ───────────────────
+const openai = new OpenAI({
+  apiKey: process.env.OPENAI_API_KEY || process.env.GEMINI_API_KEY,
+  baseURL: 'https://openrouter.ai/api/v1',
+  defaultHeaders: {
+    "HTTP-Referer": "http://localhost:5173",
+    "X-Title": "AI Study Arena",
+  }
 });
 
-// Rooms that have a bot (roomId → topic)
+// Routes
+app.use('/api/quiz', quizRouter);
+app.use('/api/leaderboard', leaderboardRouter);
+
+// Helper: Pick random from array
+const pick = (arr) => arr[Math.floor(Math.random() * arr.length)];
+
+// Bot intelligence fallback
+function generateBotReplyFallback(message, roomId) {
+  const lower = message.toLowerCase();
+
+  if (/hi|hello|hey|yo/.test(lower)) {
+    return pick(['hey!', 'hellooo', 'yo, ready for the quiz?', 'hi! staying focused?']);
+  }
+  return pick(['interesting...', 'idk about that one', 'let\'s stick to the topic lol', 'fair point', 'tbh i\'m just ready to battle']);
+}
+
+// Room tracking for bots
 const botRooms = new Map();
+const chatHistories = new Map();
+const globalChatCache = new Map();
 
-// Basic Matching Queue
-let matchQueue = [];
+async function generateBotReplyAI(message, roomId, topic, personaName) {
+  if (!chatHistories.has(roomId)) chatHistories.set(roomId, []);
+  const history = chatHistories.get(roomId);
+  const cleanMsg = message.toLowerCase().trim();
+  
+  // 1. Check Personal Question Exception
+  const isPersonalQuestions = /who are you|what (do |are )?you do|your name|are you (an )?ai|real|bot/i.test(cleanMsg);
 
+  // 2. 5-in-2 Caching Rule
+  if (!isPersonalQuestions) {
+    if (!globalChatCache.has(cleanMsg)) globalChatCache.set(cleanMsg, { count: 0, replies: [] });
+    const cacheEntry = globalChatCache.get(cleanMsg);
+    cacheEntry.count += 1;
+    const inCachePhase = (cacheEntry.count % 5 === 4 || cacheEntry.count % 5 === 0);
+    
+    if (inCachePhase && cacheEntry.replies.length > 0) {
+      const reply = pick(cacheEntry.replies);
+      updateHistory(history, message, reply);
+      return reply;
+    }
+  }
+
+  // 3. OpenRouter Generation
+  try {
+    const slicedHistory = history.slice(-4).map(h => ({
+      role: h.role === 'user' ? 'user' : 'assistant',
+      content: h.parts[0].text
+    }));
+
+    const response = await openai.chat.completions.create({
+      model: 'openai/gpt-4o-mini', 
+      messages: [
+        { role: 'system', content: `You are ${personaName}, a student studying ${topic}. Talk like a Gen Z student (lowercase, slang). Keep replies UNDER 15 WORDS. Be human. NO AI mentions.` },
+        ...slicedHistory,
+        { role: 'user', content: message }
+      ],
+      max_tokens: 50,
+      temperature: 0.8
+    }, { timeout: 10000 }); // 10 second timeout for safety
+
+    const reply = response.choices[0].message.content.trim();
+    
+    // Save to Cache
+    if (!isPersonalQuestions) {
+      const entry = globalChatCache.get(cleanMsg);
+      if (entry && !entry.replies.includes(reply)) entry.replies.push(reply);
+    }
+
+    updateHistory(history, message, reply);
+    return reply;
+
+  } catch (err) {
+    console.warn('[Chat] OpenRouter failed:', err.message);
+    const reply = generateBotReplyFallback(message, roomId);
+    updateHistory(history, message, reply);
+    return reply;
+  }
+}
+
+function updateHistory(history, msg, reply) {
+  history.push({ role: 'user', parts: [{ text: msg }] });
+  history.push({ role: 'model', parts: [{ text: reply }] });
+}
+
+function pickRandom(arr) { return arr[Math.floor(Math.random() * arr.length)]; }
+
+// Socket logic
 io.on('connection', (socket) => {
-  console.log(`User connected: ${socket.id}`);
+  socket.on('find_match', ({ username, topic }) => {
+    console.log(`[Matchmaking] ${username} searching for ${topic}`);
+    
+    // Human-like opponent names
+    const names = ['Scholar_Zoe', 'Study_Liam', 'Archivist_Max', 'Quantum_Kyra', 'Bio_Ben', 'History_Maya', 'Atlas_James', 'Novus_Luna'];
+    const fakeOpponent = names[Math.floor(Math.random() * names.length)];
+    const persona = pick(['The Analytical Monk', 'The Fast Responder', 'The Socratic Doubter']);
 
-  // ── Matchmaking ────────────────────────────
-  socket.on('find_match', (data) => {
-    const { username, topic } = data;
-    console.log(`${username} looking for match on ${topic}`);
+    const roomId = `room_${Math.random().toString(36).substring(7)}`;
+    const roomData = { 
+      roomId, 
+      topic, 
+      players: [username, fakeOpponent],
+      opponent: fakeOpponent, 
+      persona: persona 
+    };
 
-    matchQueue.push({ socket, username, topic });
+    // Store room info
+    botRooms.set(roomId, { topic, players: [username, fakeOpponent], createdAt: Date.now() });
+    
+    socket.emit('match_found', roomData);
+  });
 
-    if (matchQueue.length >= 2) {
-      const p1 = matchQueue.shift();
-      const p2 = matchQueue.shift();
-      const roomId = `room_${Date.now()}`;
+  socket.on('join_room', ({ roomId, username, topic }) => {
+    socket.join(roomId);
+    if (!botRooms.has(roomId)) {
+      botRooms.set(roomId, { topic, lastActivity: Date.now(), players: [] });
+    }
+    const room = botRooms.get(roomId);
+    if (!room.players.includes(username)) room.players.push(username);
+    
+    socket.to(roomId).emit('player_joined', { username });
+  });
 
-      p1.socket.join(roomId);
-      p2.socket.join(roomId);
+  socket.on('send_message', async ({ roomId, message, sender }) => {
+    // 1. Instantly echo the user's message
+    io.to(roomId).emit('receive_message', { sender, message, timestamp: new Date().toISOString() });
+    
+    const room = botRooms.get(roomId);
+    if (room && sender !== 'AI Scholar') {
+      // 2. Instantly show that the bot is "composing"
+      io.to(roomId).emit('bot_typing');
 
-      const roomData = {
-        roomId,
-        topic: p1.topic || p2.topic || 'General Knowledge',
-        players: [p1.username, p2.username],
-        duration: 30,
-      };
-
-      io.to(roomId).emit('match_found', roomData);
-    } else {
-      // Bot fallback after 2s if no real partner found
-      setTimeout(() => {
-        const index = matchQueue.findIndex((p) => p.socket.id === socket.id);
-        if (index !== -1) {
-          const p1 = matchQueue.splice(index, 1)[0];
-          const roomId = `room_${Date.now()}`;
-          p1.socket.join(roomId);
-
-          // Assign bot persona immediately so name is consistent
-          const persona = getBotPersona(roomId);
-
-          const roomData = {
-            roomId,
-            topic: p1.topic || 'General Knowledge',
-            players: [p1.username, persona.name], // show bot's real persona name
-            duration: 30,
-          };
-
-          // Remember this room has a bot and what topic it's about
-          botRooms.set(roomId, p1.topic || 'General Knowledge');
-
-          io.to(roomId).emit('match_found', roomData);
-
-          // Bot sends an opening message after a short delay
-          setTimeout(() => {
-            const opener = pick([
-              `hey! glad I found someone to study with 😄`,
-              `hi! let's make the most of the 30 seconds lol`,
-              `hey there! ready to talk ${p1.topic || 'stuff'}?`,
-              `finally! I was waiting forever 😅 hi!`,
-            ]);
-            io.to(roomId).emit('receive_message', {
-              message: opener,
-              sender: persona.name,
-              timestamp: Date.now(),
-            });
-          }, 1000 + Math.random() * 800);
-        }
-      }, 2000);
+      try {
+        const reply = await generateBotReplyAI(message, roomId, room.topic, 'AI Scholar');
+        // 3. Send AI reply with a human-like delay
+        setTimeout(() => {
+          io.to(roomId).emit('receive_message', { sender: 'AI Scholar', message: reply, timestamp: new Date().toISOString() });
+        }, 800 + Math.random() * 1200);
+      } catch (err) {
+        console.error('[AI] Bot reply error:', err.message);
+      }
     }
   });
 
-  // ── Study Chat ─────────────────────────────
-  socket.on('send_message', (data) => {
-    const { roomId, message, sender } = data;
-    io.to(roomId).emit('receive_message', { message, sender, timestamp: Date.now() });
+  socket.on('battle_ready', ({ roomId, username }) => {
+    socket.to(roomId).emit('opponent_ready', { username });
+  });
 
-    // Bot reply logic
-    if (botRooms.has(roomId)) {
-      const persona = getBotPersona(roomId);
-      // Sender check — don't reply to own echo if somehow bot name leaks
-      if (sender === persona.name) return;
+  socket.on('timer_ended', ({ roomId }) => {
+    console.log(`[Game] Timer ended for room ${roomId}. Starting quiz...`);
+    io.to(roomId).emit('quiz_starting');
 
-      const topic = botRooms.get(roomId);
-      const delay = persona.typingSpeed;
-
-      // Emit "bot is typing" indicator
-      io.to(roomId).emit('bot_typing', { sender: persona.name });
-
-      setTimeout(() => {
-        let reply = generateBotReply(message, roomId);
-
-        // 25% chance: also drop a topic-related line after the main reply
-        if (sometimes(0.25)) {
-          const topicLine = getTopicLine(topic);
-          if (topicLine) {
-            reply = reply + ' ' + topicLine;
-          }
+    // Simulate Human-Like Score Progression
+    const room = botRooms.get(roomId);
+    if (room) {
+      const botName = room.players.find(p => p !== 'AI Scholar' && p !== 'System' && !p.includes(roomId)); // Dynamically find the bot's name
+      let aiScore = 0;
+      let aiAnswered = 0;
+      const totalQuestions = 5;
+      
+      const interval = setInterval(() => {
+        aiAnswered++;
+        
+        // Human-like performance: 75% accuracy, score varies by "speed"
+        if (Math.random() > 0.25) {
+          const speedPoints = Math.floor(Math.random() * 40) + 60; // 60-100 points
+          aiScore += speedPoints;
         }
+        
+        io.to(roomId).emit('opponent_update', { score: aiScore, answered: aiAnswered });
+        console.log(`[Bot-Sim] ${botName} answered ${aiAnswered}/5. Score: ${aiScore}`);
 
-        io.to(roomId).emit('receive_message', {
-          message: reply,
-          sender: persona.name,
-          timestamp: Date.now(),
-        });
-      }, delay);
+        if (aiAnswered >= totalQuestions) clearInterval(interval);
+      }, 4000 + Math.random() * 8000); // Varied reaction time (4s to 12s)
     }
   });
 
-  // ── Quiz Trigger ───────────────────────────
-  socket.on('timer_ended', (data) => {
-    io.to(data.roomId).emit('quiz_starting');
-  });
-
-  // ── Disconnect ─────────────────────────────
-  socket.on('disconnect', () => {
-    matchQueue = matchQueue.filter((p) => p.socket.id !== socket.id);
-    console.log(`User disconnected: ${socket.id}`);
+  socket.on('complete_battle', ({ roomId, score, stats }) => {
+    socket.to(roomId).emit('opponent_finished', { score, stats });
   });
 });
 
-const PORT = process.env.PORT || 3001;
-server.listen(PORT, () => {
-  console.log(`Backend running on port ${PORT}`);
+const PORT = process.env.PORT || 5000;
+httpServer.listen(PORT, () => {
+  console.log(`Server running on port ${PORT}`);
 });
