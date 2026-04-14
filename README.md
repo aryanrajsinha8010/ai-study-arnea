@@ -50,7 +50,7 @@ cd ../frontend && npm install
 ## 🔒 Security & The Vault
 Your API keys are precious. 
 *   **`.env`** is strictly ignored by the **Auto Git Uploader** to prevent accidental leaks.
-*   The **`auto git uploader.bat`** is included for developers to push safe updates to their own forks with a single click.
+
 
 ---
 
