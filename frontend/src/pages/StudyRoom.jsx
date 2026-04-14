@@ -5,34 +5,41 @@ import { socket } from '../socket';
 
 export default function StudyRoom() {
   const navigate = useNavigate();
-  const [roomData, setRoomData] = useState(null);
-  const [messages, setMessages] = useState([]);
-  const [input, setInput] = useState('');
-  const [timeLeft, setTimeLeft] = useState(30);
-  const [isBotTyping, setIsBotTyping] = useState(false);
-
   const messagesEndRef = useRef(null);
 
-  useEffect(() => {
+  const [roomData] = useState(() => JSON.parse(sessionStorage.getItem('roomData') || 'null'));
+  const [messages, setMessages] = useState(() => {
+    const d = JSON.parse(sessionStorage.getItem('roomData') || '{}');
+    return [
+      { sender: 'System', message: `Welcome to the Study Room: ${d.topic}. You have ${d.duration || 30} seconds to discuss and learn!`, timestamp: Date.now(), isSystem: true }
+    ];
+  });
+  const [input, setInput] = useState('');
+  const [timeLeft, setTimeLeft] = useState(() => {
     const data = JSON.parse(sessionStorage.getItem('roomData') || 'null');
-    if (!data) {
+    return data?.duration || 30;
+  });
+  const [isBotTyping, setIsBotTyping] = useState(false);
+
+  const scrollToBottom = () => {
+    setTimeout(() => {
+      messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    }, 100);
+  };
+
+  useEffect(() => {
+    if (!roomData) {
       navigate('/');
       return;
     }
-    setRoomData(data);
-    setTimeLeft(data.duration || 30);
 
     // CRITICAL: Join the socket room so we can send/receive messages
     socket.emit('join_room', { 
-      roomId: data.roomId, 
+      roomId: roomData.roomId, 
       username: sessionStorage.getItem('username'), 
-      topic: data.topic 
+      topic: roomData.topic,
+      players: roomData.players // CRITICAL: Pass full list so server knows bot identity
     });
-
-    // Initial bot message intro
-    setMessages([
-      { sender: 'System', message: `Welcome to the Study Room: ${data.topic}. You have ${data.duration} seconds to discuss and learn!`, timestamp: Date.now(), isSystem: true }
-    ]);
 
     socket.on('receive_message', (msg) => {
       setIsBotTyping(false); // Clear typing when message arrives
@@ -49,7 +56,13 @@ export default function StudyRoom() {
       setTimeout(() => setIsBotTyping(false), 3000); // Auto-hide after 3s
     });
 
-    socket.on('quiz_starting', () => {
+    socket.on('quiz_starting', ({ questions, startAt }) => {
+      if (questions) {
+        sessionStorage.setItem('roomQuestions', JSON.stringify(questions));
+      }
+      if (startAt) {
+        sessionStorage.setItem('quizStartAt', startAt.toString());
+      }
       navigate('/battle');
     });
 
@@ -59,7 +72,7 @@ export default function StudyRoom() {
       socket.off('quiz_starting');
     };
 
-  }, [navigate]);
+  }, [navigate, roomData]);
 
   useEffect(() => {
     if (timeLeft <= 0) {
@@ -75,11 +88,6 @@ export default function StudyRoom() {
     return () => clearInterval(timerId);
   }, [timeLeft, roomData]);
 
-  const scrollToBottom = () => {
-    setTimeout(() => {
-      messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-    }, 100);
-  };
 
   const sendMessage = (e) => {
     e.preventDefault();
@@ -96,8 +104,8 @@ export default function StudyRoom() {
   if (!roomData) return null;
 
   const currentUsername = sessionStorage.getItem('username');
-  const players = roomData.players || [currentUsername, 'Scholar AI'];
-  const opponent = players.find(p => p !== currentUsername) || 'Scholar AI';
+  const players = roomData.players || [currentUsername, 'Alex_Starlight'];
+  const opponent = players.find(p => p !== currentUsername) || 'Alex_Starlight';
 
   return (
     <div className="w-full max-w-4xl h-[80vh] flex flex-col glass-panel animate-slide-up overflow-hidden border border-outline-variant/30 scholar-shadow">
@@ -106,7 +114,7 @@ export default function StudyRoom() {
       <div className="flex items-center justify-between p-4 px-6 border-b border-outline-variant/30 bg-surface-container-high/50">
         <div className="flex items-center gap-4">
           <div>
-            <h2 className="font-serif text-xl font-bold text-on-surface tracking-wide">Vs. Scholar {opponent}</h2>
+            <h2 className="font-serif text-xl font-bold text-on-surface tracking-wide">Vs. {opponent}</h2>
             <p className="font-sans text-xs text-primary uppercase tracking-widest mt-1">Subject of Focus: {roomData.topic}</p>
           </div>
         </div>
@@ -154,7 +162,7 @@ export default function StudyRoom() {
                 ? 'bg-surface-container-highest text-on-surface border-l-2 border-primary' 
                 : 'bg-surface-container-low text-on-surface border-r-2 border-outline-variant/50'
               }`}>
-                {!isMe && <div className="font-serif text-sm text-primary mb-2 italic">Scholar {msg.sender}</div>}
+                {!isMe && <div className="font-serif text-sm text-primary mb-2 italic">{msg.sender}</div>}
                 <p>{msg.message}</p>
               </div>
             </div>
@@ -163,7 +171,7 @@ export default function StudyRoom() {
         {isBotTyping && (
           <div className="flex justify-start">
             <div className="bg-surface-container-low text-on-surface-variant px-5 py-3 italic text-sm animate-pulse border-r-2 border-outline-variant/30 font-body">
-              Scholar {opponent} is composing a thought...
+              {opponent} is composing a thought...
             </div>
           </div>
         )}

@@ -1,30 +1,16 @@
-import { useState, useEffect } from 'react';
+import { useState, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Swords, BookOpen, User } from 'lucide-react';
+import { Swords, BookOpen } from 'lucide-react';
 import { socket } from '../socket';
 
 export default function Home() {
   const [username, setUsername] = useState('');
   const [topic, setTopic] = useState('');
-  const [filteredTopics, setFilteredTopics] = useState([]);
   const [showDropdown, setShowDropdown] = useState(false);
-  const [isTyping, setIsTyping] = useState(false);
-  const [isValidSelection, setIsValidSelection] = useState(false);
-  const [loadingText, setLoadingText] = useState('Consulting the archives...');
   const navigate = useNavigate();
 
-  const loadingPhrases = [
-    'Consulting the archives...',
-    'Calibrating scholarship domains...',
-    'Searching the Digital Scriptorium...',
-    'Analyzing academic lineages...',
-    'Extracting scholarly insights...',
-    'Mapping the domain of focus...'
-  ];
-
-
   // DISK-LESS DATASET: Hundreds of subjects embedded directly in the frontend for instant, zero-API filtering
-  const scholarDomains = [
+  const scholarDomains = useMemo(() => [
     // --- SCIENCE ---
     "Physics", "Astrophysics", "Quantum Mechanics", "Nuclear Physics", "Particle Physics", "Theoretical Physics", "Thermodynamics",
     "Chemistry", "Organic Chemistry", "Inorganic Chemistry", "Physical Chemistry", "Biochemistry", "Molecular Biology", "Genetics",
@@ -60,36 +46,25 @@ export default function Home() {
 
     // --- MEDICINE & LAW ---
     "Medicine", "Anatomy", "Physiology", "Pathology", "Nursing", "Public Health", "Epidemiology", "Law", "International Law", "Constitutional Law"
-  ];
+  ], []);
 
-  useEffect(() => {
-    if (topic.trim().length < 1) {
-      setFilteredTopics([]);
-      return;
-    }
-
-    if (!showDropdown) return;
-
-    // Filter instantly from our embedded dataset
-    const matches = scholarDomains
+  // Filter instantly from our embedded dataset - Derived state avoids cascading renders
+  const filteredTopics = useMemo(() => {
+    if (topic.trim().length < 1 || !showDropdown) return [];
+    return scholarDomains
       .filter(d => d.toLowerCase().includes(topic.toLowerCase()))
-      .sort((a, b) => a.indexOf(topic) - b.indexOf(topic)) // Better relevance
-      .slice(0, 8); // Show up to 8 for a richer menu
-    
-    setFilteredTopics(matches);
-    setIsTyping(false);
-  }, [topic, showDropdown]);
+      .sort((a, b) => a.toLowerCase().indexOf(topic.toLowerCase()) - b.toLowerCase().indexOf(topic.toLowerCase())) // Better relevance
+      .slice(0, 8);
+  }, [topic, showDropdown, scholarDomains]);
 
   const handleTopicChange = (e) => {
     setTopic(e.target.value);
     setShowDropdown(true);
-    setIsValidSelection(true); // Allow immediate validation for manual typing
   };
 
   const selectTopic = (t) => {
     setTopic(t);
     setShowDropdown(false);
-    setIsValidSelection(true);
   };
 
   const handleStart = (e) => {
@@ -176,14 +151,7 @@ export default function Home() {
             required
           />
           
-          {showDropdown && isTyping && (
-            <div className="absolute z-50 w-full mt-2 bg-surface-container-high border border-outline-variant/30 rounded-sm shadow-2xl px-4 py-3 text-primary font-body text-sm italic flex items-center gap-3">
-              <span className="w-4 h-4 border-2 border-primary border-t-transparent rounded-full animate-spin"></span>
-              {loadingText}
-            </div>
-          )}
-
-          {showDropdown && !isTyping && filteredTopics.length > 0 && (
+          {showDropdown && filteredTopics.length > 0 && (
             <div className="absolute z-50 w-full mt-2 bg-surface-container-high border border-outline-variant/30 rounded-sm shadow-2xl overflow-hidden font-body">
               {filteredTopics.map((t, i) => (
                 <div 
@@ -197,7 +165,7 @@ export default function Home() {
             </div>
           )}
           
-          {showDropdown && !isTyping && topic.trim().length >= 2 && filteredTopics.length === 0 && (
+          {showDropdown && topic.trim().length >= 2 && filteredTopics.length === 0 && (
             <div className="absolute z-50 w-full mt-2 bg-primary/10 border border-primary/30 rounded-sm shadow-xl px-4 py-3 text-on-surface font-body text-sm italic">
               A unique domain. The Arena will adapt to your choice.
             </div>

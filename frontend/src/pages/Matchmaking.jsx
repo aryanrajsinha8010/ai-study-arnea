@@ -6,6 +6,13 @@ import { socket } from '../socket';
 export default function Matchmaking() {
   const navigate = useNavigate();
   const [status, setStatus] = useState('Searching for an opponent...');
+  const [countdown, setCountdown] = useState(30);
+
+  useEffect(() => {
+    if (countdown <= 0) return;
+    const timer = setInterval(() => setCountdown(c => c - 1), 1000);
+    return () => clearInterval(timer);
+  }, [countdown]);
 
   useEffect(() => {
     const username = sessionStorage.getItem('username');
@@ -19,17 +26,20 @@ export default function Matchmaking() {
     // Ping the server to find a match
     socket.emit('find_match', { username, topic });
 
-    // FAIL-SAFE: If no match found in 5 seconds, force proceed
+    // FAIL-SAFE: If no match found in 30 seconds, force proceed
     const failSafeTimer = setTimeout(() => {
       console.log("[Matchmaking] Fail-safe triggered - manual match initiated.");
+      const botNames = ['Aria_Zen', 'Liam_Study', 'Max_Archivist', 'Kyra_JS', 'Ben_Bio', 'Maya_Code', 'James_H', 'Luna_Dev', 'Alex_Smith', 'Jordan_K', 'Sasha_R', 'Sam_D', 'Casey_M', 'Zoe_Q', 'Noah_V'];
+      const botName = botNames[Math.floor(Math.random() * botNames.length)];
+      
       handleMatch({ 
-        roomId: `fail_safe_${Math.random().toString(36).substring(7)}`, 
+        roomId: `room_bot_fail_safe_${Math.random().toString(36).substring(7)}`, 
         topic, 
-        players: [username, 'AI Scholar'],
-        opponent: 'AI Scholar', 
+        players: [username, botName],
+        opponent: botName, 
         persona: 'The Analytical Monk' 
       });
-    }, 5000);
+    }, 30000);
 
     // Listen for match
     function handleMatch(roomData) {
@@ -70,8 +80,15 @@ export default function Matchmaking() {
       <h2 className="mt-12 text-2xl font-bold text-gray-200 tracking-wide">
         {status}
       </h2>
-      <p className="mt-4 text-gray-400 max-w-sm text-center">
-        Scanning the neural net for a worthy challenger...
+      
+      {countdown > 0 && status !== 'Match Found!' && (
+        <div className="mt-4 text-primary-400 font-mono text-lg animate-pulse">
+          Estimated wait: {countdown}s
+        </div>
+      )}
+
+      <p className="mt-8 text-gray-400 max-w-sm text-center">
+        Scanning the neural net for a worthy challenger... Finding the best match for your domain of focus.
       </p>
     </div>
   );

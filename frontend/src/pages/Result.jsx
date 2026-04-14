@@ -5,46 +5,41 @@ import { socket } from '../socket';
 
 export default function Result() {
   const navigate = useNavigate();
-  const [score, setScore] = useState(0);
-  const [opponentScore, setOpponentScore] = useState(0);
-  const [username, setUsername] = useState('');
-  const [opponentName, setOpponentName] = useState('Opponent');
-  const [roomData, setRoomData] = useState(null);
-  const [outcome, setOutcome] = useState(null); // 'win' | 'loss' | 'draw'
+  const [score] = useState(() => parseInt(sessionStorage.getItem('finalScore') || '0', 10));
+  const [opponentScore, setOpponentScore] = useState(() => JSON.parse(sessionStorage.getItem('opponentStats') || '{"score":0}').score || 0);
+  const [username] = useState(() => sessionStorage.getItem('username') || 'Unknown');
+  const [opponentName] = useState(() => {
+    const data = JSON.parse(sessionStorage.getItem('roomData') || '{}');
+    const user = sessionStorage.getItem('username') || 'Unknown';
+    return data.players?.find(p => p !== user) || 'Opponent';
+  });
+  const [roomData] = useState(() => JSON.parse(sessionStorage.getItem('roomData') || '{}'));
+
+  // Derived state to avoid cascading renders and lint errors
+  const outcome = score > opponentScore ? 'win' : (score < opponentScore ? 'loss' : 'draw');
 
   useEffect(() => {
-    const finalScore = parseInt(sessionStorage.getItem('finalScore') || '0', 10);
-    const user = sessionStorage.getItem('username') || 'Unknown';
-    const data = JSON.parse(sessionStorage.getItem('roomData') || '{}');
-    const opStats = JSON.parse(sessionStorage.getItem('opponentStats') || '{"score":0}');
-
-    const myScore = finalScore;
-    const oppScore = opStats.score || 0;
-    const opponent = data.players?.find(p => p !== user) || 'Opponent';
-
-    setScore(myScore);
-    setOpponentScore(oppScore);
-    setUsername(user);
-    setOpponentName(opponent);
-    setRoomData(data);
-
-    if (myScore > oppScore) setOutcome('win');
-    else if (myScore < oppScore) setOutcome('loss');
-    else setOutcome('draw');
+    // REAL-TIME SYNC: Listen for opponent finishing or scoring while we are on this page
+    socket.on('opponent_update', (data) => {
+      setOpponentScore(data.score);
+      sessionStorage.setItem('opponentStats', JSON.stringify({ score: data.score, answered: data.answered }));
+    });
 
     // Save to leaderboard
-    if (finalScore && user !== 'Unknown') {
+    if (score && username !== 'Unknown') {
       fetch('http://localhost:5000/api/leaderboard/update', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          username: user,
-          topic: data.topic || 'General Knowledge',
-          score: myScore
+          username: username,
+          topic: roomData?.topic || 'General Knowledge',
+          score: score
         })
       }).catch(err => console.error('Failed to save score:', err));
     }
-  }, []);
+
+    return () => socket.off('opponent_update');
+  }, [score, username, roomData]);
 
   const handlePlayAgain = () => {
     sessionStorage.removeItem('roomData');

@@ -5,6 +5,7 @@ node_modules/
 # Environment variables - NEVER upload these
 .env
 **/.env
+INSTALL_ARENA.bat
 
 # Logs
 *.log

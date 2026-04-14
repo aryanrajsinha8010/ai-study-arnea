@@ -1,84 +1,49 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { BrainCircuit, Loader2, CheckCircle2, XCircle } from 'lucide-react';
 import { socket } from '../socket';
 
 export default function QuizBattle() {
   const navigate = useNavigate();
-  const [roomData, setRoomData] = useState(null);
-  const [questions, setQuestions] = useState([]);
+  const [roomData] = useState(() => JSON.parse(sessionStorage.getItem('roomData') || 'null'));
+  const [questions] = useState(() => JSON.parse(sessionStorage.getItem('roomQuestions') || '[]'));
   const [currentIdx, setCurrentIdx] = useState(0);
   const [score, setScore] = useState(0);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(() => {
+    const qAt = parseInt(sessionStorage.getItem('quizStartAt') || '0', 10);
+    return qAt > Date.now();
+  });
   const [timeLeft, setTimeLeft] = useState(10);
   const [selectedOption, setSelectedOption] = useState(null);
   const [showAnswer, setShowAnswer] = useState(false);
   const [opponentStats, setOpponentStats] = useState({ score: 0, answered: 0 });
+  const [waitingForConclude, setWaitingForConclude] = useState(false);
+  
+  const [syncCountdown, setSyncCountdown] = useState(() => {
+    const startAt = parseInt(sessionStorage.getItem('quizStartAt') || '0', 10);
+    const delay = startAt - Date.now();
+    return delay > 0 ? Math.ceil(delay / 1000) : null;
+  });
 
-
-  useEffect(() => {
-    const data = JSON.parse(sessionStorage.getItem('roomData') || 'null');
-    if (!data) {
-      navigate('/');
-      return;
-    }
-    setRoomData(data);
-
-    // Fetch AI questions
-    fetch('http://localhost:5000/api/quiz/generate', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ 
-        topic: data.topic,
-        chatHistory: JSON.parse(sessionStorage.getItem('chatHistory') || '[]')
-      })
-    })
-    .then(res => res.json())
-    .then(data => {
-      if (!Array.isArray(data) || data.length === 0) {
-        throw new Error('No questions returned from server');
-      }
-      setQuestions(data);
-      setLoading(false);
-    })
-    .catch(err => {
-      console.error('[QuizBattle] Failed to load questions:', err);
-      setLoading(false); // Prevent infinite loading spinner
-    });
-
-    socket.on('opponent_update', (data) => {
-      setOpponentStats({ score: data.score, answered: data.answered });
-      // Persist opponent score so Result page can display the winner
-      sessionStorage.setItem('opponentStats', JSON.stringify({ score: data.score, answered: data.answered }));
-    });
-
-    return () => {
-      socket.off('opponent_update');
-    };
-  }, [navigate]);
-
-
-  useEffect(() => {
-    if (loading || showAnswer || currentIdx >= questions.length) return;
-
-    if (timeLeft <= 0) {
-      handleAnswer(null); // Time's up
-      return;
-    }
-
-    const timer = setInterval(() => setTimeLeft(t => t - 1), 1000);
-    return () => clearInterval(timer);
-  }, [timeLeft, loading, showAnswer, currentIdx, questions]);
-
-  const handleAnswer = (option) => {
-    if (!questions[currentIdx]) return; // Guard against empty question state
+  // 1. Wrap in useCallback to avoid changing dependencies
+  const handleAnswer = useCallback((option) => {
+    if (!questions[currentIdx] || waitingForConclude) return;
     setSelectedOption(option);
     setShowAnswer(true);
 
     const isCorrect = option === questions[currentIdx].correctAnswer;
     const pointsEarned = isCorrect ? Math.max(10, timeLeft * 10) : 0;
-    const newScore = score + pointsEarned; // Calculate once, use everywhere
+    const newScore = score + pointsEarned;
     if (isCorrect) setScore(newScore);
+
+    // REAL-TIME SYNC: Tell opponent our current progress
+    if (roomData?.roomId) {
+      socket.emit('update_score', { 
+        roomId: roomData.roomId, 
+        score: newScore, 
+        answered: currentIdx + 1 
+      });
+    }
 
     setTimeout(() => {
       if (currentIdx + 1 < questions.length) {
@@ -87,20 +52,106 @@ export default function QuizBattle() {
         setShowAnswer(false);
         setTimeLeft(10);
       } else {
-        // End of quiz — save the already-computed score
+        // End of local quiz
         sessionStorage.setItem('finalScore', newScore);
-        navigate('/result');
+        setWaitingForConclude(true); 
+
+        // Tell server we are finished
+        if (roomData?.roomId) {
+          socket.emit('complete_battle', { 
+            roomId: roomData.roomId, 
+            score: newScore,
+            stats: { username: sessionStorage.getItem('username'), answered: questions.length }
+          });
+        }
       }
     }, 2000);
-  };
+  }, [currentIdx, questions, roomData, score, timeLeft, waitingForConclude]);
+
+
+  // Effect 1: Join the room on mount (always)
+  useEffect(() => {
+    if (!roomData) {
+      navigate('/');
+      return;
+    }
+    socket.emit('join_room', { 
+      roomId: roomData.roomId, 
+      username: sessionStorage.getItem('username'), 
+      topic: roomData.topic,
+      players: roomData.players
+    });
+  }, [navigate, roomData]);
+
+  // Effect 2: Countdown timer to show quiz at the right moment
+  useEffect(() => {
+    if (!questions || questions.length === 0) return;
+    const startAt = parseInt(sessionStorage.getItem('quizStartAt') || '0', 10);
+    const delay = startAt - Date.now();
+    if (delay > 0) {
+      const timer = setTimeout(() => {
+        setLoading(false);
+        setSyncCountdown(null);
+      }, delay);
+      return () => clearTimeout(timer);
+    } else {
+      setLoading(false);
+      setSyncCountdown(null);
+    }
+  }, [questions]);
+
+  // Effect 3: Socket listeners — ALWAYS registered, never blocked by early returns
+  useEffect(() => {
+    const handleOpponentUpdate = ({ score: opScore, answered }) => {
+      setOpponentStats({ score: opScore, answered });
+      sessionStorage.setItem('opponentStats', JSON.stringify({ score: opScore, answered }));
+    };
+
+    const handleBattleConcluded = (data) => {
+      if (data?.results) {
+        sessionStorage.setItem('battleResults', JSON.stringify(data.results));
+      }
+      navigate('/result');
+    };
+
+    socket.on('opponent_update', handleOpponentUpdate);
+    socket.on('battle_concluded', handleBattleConcluded);
+
+    return () => {
+      socket.off('opponent_update', handleOpponentUpdate);
+      socket.off('battle_concluded', handleBattleConcluded);
+    };
+  }, [navigate]);
+
+
+  useEffect(() => {
+    if (loading || showAnswer || currentIdx >= questions.length || waitingForConclude) return;
+
+    const timer = setInterval(() => {
+      setTimeLeft(t => {
+        if (t <= 1) {
+          clearInterval(timer);
+          handleAnswer(null);
+          return 0;
+        }
+        return t - 1;
+      });
+    }, 1000);
+
+    return () => clearInterval(timer);
+  }, [loading, showAnswer, currentIdx, questions, waitingForConclude, handleAnswer]);
+
 
   if (loading) {
     return (
       <div className="flex flex-col items-center justify-center animate-slide-up h-[60vh]">
-        <BrainCircuit size={64} strokeWidth={1} className="text-primary animate-pulse mb-8 opacity-80" />
-        <h2 className="font-serif text-3xl font-bold text-on-surface mb-4">Consulting the Grand Archives...</h2>
+        <BrainCircuit size={64} strokeWidth={1} className={`text-primary mb-8 opacity-80 ${syncCountdown ? '' : 'animate-pulse'}`} />
+        <h2 className="font-serif text-3xl font-bold text-on-surface mb-4">
+          {syncCountdown ? `Trial Commencing in ${syncCountdown}...` : 'Consulting the Grand Archives...'}
+        </h2>
         <p className="font-body text-on-surface-variant text-lg italic flex items-center gap-3">
-          Synthesizing trial bounds from deliberation <Loader2 size={18} className="animate-spin text-primary" />
+          {syncCountdown ? 'Steady your mind; the arena awaits.' : 'Synthesizing trial bounds from deliberation'}
+          {!syncCountdown && <Loader2 size={18} className="animate-spin text-primary" />}
         </p>
       </div>
     );
@@ -126,9 +177,33 @@ export default function QuizBattle() {
   const question = questions[currentIdx];
 
   return (
-    <div className="w-full max-w-3xl glass-panel border border-outline-variant/30 p-10 animate-slide-up scholar-shadow relative">
+    <div className={`w-full max-w-3xl glass-panel border border-outline-variant/30 p-10 animate-slide-up scholar-shadow relative ${waitingForConclude ? 'opacity-60 pointer-events-none' : ''}`}>
+      
+      {/* Waiting Overlay */}
+      {waitingForConclude && (
+        <div className="absolute inset-0 z-50 flex flex-col items-center justify-center bg-surface/60 backdrop-blur-sm">
+          <div className="bg-surface-container border border-primary/50 p-8 rounded-sm shadow-2xl text-center">
+             <Loader2 size={48} className="animate-spin text-primary mx-auto mb-6" />
+             <h3 className="font-serif text-2xl font-bold text-on-surface mb-2">Finalizing Archives</h3>
+             <p className="font-body text-on-surface-variant italic">Waiting for your rival to finish their trial...</p>
+             <div className="mt-6 flex justify-center gap-4 border-t border-outline-variant/30 pt-4">
+                <div className="text-center">
+                  <div className="text-[10px] uppercase tracking-tighter text-outline mb-1">Your Score</div>
+                  <div className="font-serif text-xl font-bold text-primary">{score}</div>
+                </div>
+                <div className="w-[1px] bg-outline-variant/30" />
+                <div className="text-center">
+                  <div className="text-[10px] uppercase tracking-tighter text-outline mb-1">Opponent Score</div>
+                  <div className="font-serif text-xl font-bold text-outline">{opponentStats.score}</div>
+                </div>
+             </div>
+          </div>
+        </div>
+      )}
+
       {/* Decorative Top Border */}
       <div className="absolute top-0 left-0 w-full h-[1px] bg-gradient-to-r from-transparent via-primary-container to-transparent opacity-40"></div>
+
 
       {/* Header */}
       <div className="flex justify-between items-end mb-10 pb-6 border-b border-outline-variant/30">

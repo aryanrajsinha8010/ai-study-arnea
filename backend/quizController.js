@@ -23,7 +23,7 @@ const topicRequestCounts = {};
 // ─────────────────────────────────────────────────
 //  AI Quiz Generator (via OpenRouter)
 // ─────────────────────────────────────────────────
-async function generateWithAI(topic, chatContext) {
+export async function generateWithAI(topic, chatContext) {
   const systemPrompt = `You are an expert quiz master. Generate exactly 5 multiple-choice quiz questions about the given topic.
 Return ONLY a valid JSON object in this exact format:
 {
@@ -186,7 +186,7 @@ const FALLBACK_BANK = {
   ],
 };
 
-function getFallbackQuiz(topic = '') {
+export function getFallbackQuiz(topic = '') {
   const lower = (topic || '').toLowerCase();
   for (const [key, questions] of Object.entries(FALLBACK_BANK)) {
     if (lower.includes(key)) return questions;
