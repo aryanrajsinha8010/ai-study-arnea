@@ -1,5 +1,5 @@
 import { useEffect, useState, useRef } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useBlocker } from 'react-router-dom';
 import { Send, Clock, Users, PlayCircle } from 'lucide-react';
 import { socket } from '../socket';
 
@@ -11,7 +11,7 @@ export default function StudyRoom() {
   const [messages, setMessages] = useState(() => {
     const d = JSON.parse(sessionStorage.getItem('roomData') || '{}');
     return [
-      { sender: 'System', message: `Welcome to the Study Room: ${d.topic}. You have ${d.duration || 30} seconds to discuss and learn!`, timestamp: Date.now(), isSystem: true }
+      { sender: 'System', message: `Welcome to the Study Room: ${d.topic}. You have ${d.duration || 30} seconds to discuss and learn before facing ${d.numQuestions || 5} questions!`, timestamp: Date.now(), isSystem: true }
     ];
   });
   const [input, setInput] = useState('');
@@ -20,6 +20,26 @@ export default function StudyRoom() {
     return data?.duration || 30;
   });
   const [isBotTyping, setIsBotTyping] = useState(false);
+
+  const blocker = useBlocker(({ currentLocation, nextLocation }) => {
+    if (nextLocation.pathname === '/battle') return false;
+    return currentLocation.pathname !== nextLocation.pathname;
+  });
+
+  useEffect(() => {
+    if (blocker.state === 'blocked') {
+      const wantToQuit = window.confirm("Are you sure you want to quit? This will forfeit the match and terminate the session.");
+      if (wantToQuit) {
+        if (roomData?.roomId) {
+           socket.emit('abandon_battle', { roomId: roomData.roomId });
+        }
+        blocker.proceed();
+      } else {
+        blocker.reset();
+      }
+    }
+  }, [blocker, roomData]);
+
 
   const scrollToBottom = () => {
     setTimeout(() => {
@@ -40,6 +60,9 @@ export default function StudyRoom() {
       topic: roomData.topic,
       players: roomData.players // CRITICAL: Pass full list so server knows bot identity
     });
+
+    // START Generation in background during discussion
+    socket.emit('start_quiz_gen', { roomId: roomData.roomId });
 
     socket.on('receive_message', (msg) => {
       setIsBotTyping(false); // Clear typing when message arrives

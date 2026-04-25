@@ -1,30 +1,26 @@
 import 'dotenv/config';
-import OpenAI from 'openai';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { supabase } from './leaderboardController.js';
+import { openai, isNvidia, isNexum, modelName } from './config/ai.js';
+import { supabase } from './config/database.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// ── OpenRouter Client ───────────────────────────
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY || process.env.GEMINI_API_KEY,
-  baseURL: 'https://openrouter.ai/api/v1',
-  defaultHeaders: {
-    "HTTP-Referer": "http://localhost:5173", // Optional, for OpenRouter rankings
-    "X-Title": "AI Study Arena",
-  }
-});
+// AI client imported from config/ai.js (single source of truth)
 
 const topicRequestCounts = {};
+
+// ── Memory Tree Cache for Load Optimization ──────
+// Structure: { branchTopic: [ array of questions for this branch ] }
+export const QuestionTree = {};
 
 // ─────────────────────────────────────────────────
 //  AI Quiz Generator (via OpenRouter)
 // ─────────────────────────────────────────────────
-export async function generateWithAI(topic, chatContext) {
-  const systemPrompt = `You are an expert quiz master. Generate exactly 5 multiple-choice quiz questions about the given topic.
+export async function generateWithAI(topic, chatContext, numQuestions = 5) {
+  const systemPrompt = `You are an expert quiz master. Generate exactly ${numQuestions} multiple-choice quiz questions about the given topic.
 Return ONLY a valid JSON object in this exact format:
 {
   "questions": [
@@ -38,12 +34,12 @@ Return ONLY a valid JSON object in this exact format:
 Rules:
 - Each question must have exactly 4 options.
 - correctAnswer must be the EXACT string from the options array.
-- If the topic is inappropriate, generate General Knowledge questions instead.`;
+- If the topic is inappropriate, generate General Knowledge questions otherwise.`;
 
   const userPrompt = `Topic: "${topic}"${chatContext ? `\n\nContext from student discussion:\n${chatContext}` : ''}`;
 
   const response = await openai.chat.completions.create({
-    model: 'openai/gpt-4o-mini', // High reliability on OpenRouter
+    model: modelName,
     messages: [
       { role: 'system', content: systemPrompt },
       { role: 'user',   content: userPrompt },
@@ -66,7 +62,7 @@ Rules:
 // ─────────────────────────────────────────────────
 export const generateQuiz = async (req, res) => {
   try {
-    const { topic, chatHistory } = req.body;
+    const { topic, chatHistory, numQuestions = 5 } = req.body;
 
     let chatContext = '';
     if (chatHistory && chatHistory.length > 0) {
@@ -78,21 +74,46 @@ export const generateQuiz = async (req, res) => {
 
     const topicKey = topic.toLowerCase();
     topicRequestCounts[topicKey] = (topicRequestCounts[topicKey] || 0) + 1;
-    const forceApiRefresh = (topicRequestCounts[topicKey] % 3 === 0);
+    
+    // AI Load Decrease: Only strictly regenerate API questions if we have very
+    // few questions in the memory bank. If we have plenty, wait until the 20th play.
+    const playCount = topicRequestCounts[topicKey];
+    const hasFewQuestions = (!QuestionTree[topicKey] || QuestionTree[topicKey].length < 30);
+    const forceApiRefresh = hasFewQuestions ? (playCount % 3 === 0) : (playCount % 20 === 0);
 
-    // ── Try Database Cache First ────────────────
+    // ── Try Memory Tree Cache First ────────────────
+    if (!forceApiRefresh) {
+      if (QuestionTree[topicKey] && QuestionTree[topicKey].length >= numQuestions) {
+        const branch = QuestionTree[topicKey];
+        const maxOffset = Math.max(0, branch.length - numQuestions);
+        const randomOffset = Math.floor(Math.random() * (maxOffset + 1));
+        const slice = [...branch].slice(randomOffset, randomOffset + numQuestions);
+        console.log(`[Quiz] Memory Tree Branch returned ${slice.length} unique questions for "${topic}" ✓`);
+        return res.json(slice.sort(() => 0.5 - Math.random()));
+      }
+    }
+
+    // ── Try Database Cache (Build the Branch) ──────
     if (supabase && !forceApiRefresh) {
       try {
-        console.log(`[Quiz] Searching database cache for topic: "${topic}"`);
+        console.log(`[Quiz] Fetching branch for "${topic}" from Database to load into Memory Tree...`);
+        
+        // Fetch ALL questions for this topic exactly once
         const { data, error } = await supabase
           .from('quiz_questions')
           .select('question, options, correctAnswer')
           .ilike('topic', topic);
 
-        if (!error && data && data.length >= 5) {
-          const cachedQuestions = data.sort(() => 0.5 - Math.random()).slice(0, 5);
-          console.log(`[Quiz] Database returned ${cachedQuestions.length} cached questions ✓`);
-          return res.json(cachedQuestions);
+        if (!error && data && data.length > 0) {
+          QuestionTree[topicKey] = data; // Build our memory tree branch
+          console.log(`[Quiz] Constructed Tree Branch for "${topic}" (${data.length} nodes).`);
+
+          if (data.length >= numQuestions) {
+            const maxOffset = Math.max(0, data.length - numQuestions);
+            const randomOffset = Math.floor(Math.random() * (maxOffset + 1));
+            const slice = [...data].slice(randomOffset, randomOffset + numQuestions);
+            return res.json(slice.sort(() => 0.5 - Math.random()));
+          }
         }
       } catch (dbErr) {
         console.error('[Quiz] Database cache lookup failed:', dbErr.message);
@@ -100,8 +121,8 @@ export const generateQuiz = async (req, res) => {
     }
 
     // ── Generate via OpenRouter ─────────────────
-    console.log(`[Quiz] Generating via OpenRouter for topic: "${topic}"`);
-    const questions = await generateWithAI(topic, chatContext);
+    console.log(`[Quiz] Generating via OpenRouter for topic: "${topic}" (Count: ${numQuestions})`);
+    const questions = await generateWithAI(topic, chatContext, numQuestions);
     
     // ── Cache to Database Asynchronously ────────
     if (supabase && questions && questions.length > 0) {
@@ -112,7 +133,12 @@ export const generateQuiz = async (req, res) => {
         correctAnswer: q.correctAnswer
       }));
       supabase.from('quiz_questions').insert(insertData).then(({ error }) => {
-        if (!error) console.log('[Quiz] Saved newly generated questions to cache.');
+        if (!error) {
+           console.log('[Quiz] Saved newly generated questions to cache.');
+           // Update in-memory tree branch as well
+           if (!QuestionTree[topicKey]) QuestionTree[topicKey] = [];
+           QuestionTree[topicKey].push(...insertData);
+        }
       });
     }
 
@@ -120,7 +146,7 @@ export const generateQuiz = async (req, res) => {
 
   } catch (error) {
     console.warn('[Quiz] AI Generation failed, using fallback:', error.message);
-    res.json(getFallbackQuiz(req.body?.topic));
+    res.json(getFallbackQuiz(req.body?.topic, req.body?.numQuestions || 5));
   }
 };
 
@@ -186,18 +212,62 @@ const FALLBACK_BANK = {
   ],
 };
 
-export function getFallbackQuiz(topic = '') {
+export function getFallbackQuiz(topic = '', numQuestions = 5) {
   const lower = (topic || '').toLowerCase();
+  let baseQuestions = [];
+  
   for (const [key, questions] of Object.entries(FALLBACK_BANK)) {
-    if (lower.includes(key)) return questions;
+    if (lower.includes(key)) {
+      baseQuestions = questions;
+      break;
+    }
   }
-  return [
-    { question: `In the study of ${topic}, what is considered the most fundamental concept?`, options: ['The primary theory', 'Basic observation', 'Advanced data', 'Applied practice'], correctAnswer: 'The primary theory' },
-    { question: `Which of these tools is most likely used in ${topic}?`, options: ['Analytical thinking', 'A hammer', 'A calculator', 'All of the above'], correctAnswer: 'Analytical thinking' },
-    { question: `Which century saw the biggest advancements in ${topic}?`, options: ['18th Century', '19th Century', '20th Century', '21st Century'], correctAnswer: '20th Century' },
-    { question: `True or False: ${topic} is considered a branch of modern science?`, options: ['True', 'False', 'Partially', 'Unknown'], correctAnswer: 'True' },
-    { question: `Which of these is a key terminology in ${topic}?`, options: ['Systematic Review', 'Random Trial', 'Basic Framework', 'Core Analysis'], correctAnswer: 'Core Analysis' },
-  ];
+
+  if (baseQuestions.length === 0) {
+    baseQuestions = [
+      { question: `In the study of ${topic}, what is considered the most fundamental concept?`, options: ['The primary theory', 'Basic observation', 'Advanced data', 'Applied practice'], correctAnswer: 'The primary theory' },
+      { question: `Which of these tools is most likely used in ${topic}?`, options: ['Analytical thinking', 'A hammer', 'A calculator', 'All of the above'], correctAnswer: 'Analytical thinking' },
+      { question: `Which century saw the biggest advancements in ${topic}?`, options: ['18th Century', '19th Century', '20th Century', '21st Century'], correctAnswer: '20th Century' },
+      { question: `True or False: ${topic} is considered a branch of modern science?`, options: ['True', 'False', 'Partially', 'Unknown'], correctAnswer: 'True' },
+      { question: `Which of these is a key terminology in ${topic}?`, options: ['Systematic Review', 'Random Trial', 'Basic Framework', 'Core Analysis'], correctAnswer: 'Core Analysis' },
+    ];
+  }
+
+  const result = [];
+  const used = new Set();
+
+  // First, add the base questions found for the topic
+  for (const q of baseQuestions) {
+    if (result.length < numQuestions && !used.has(q.question)) {
+      result.push(q);
+      used.add(q.question);
+    }
+  }
+
+  // If we need more, fetch from other random categories in FALLBACK_BANK to avoid duplicates
+  if (result.length < numQuestions) {
+    const allOtherQuestions = [];
+    for (const questions of Object.values(FALLBACK_BANK)) {
+      allOtherQuestions.push(...questions);
+    }
+    // Shuffle the extra questions
+    allOtherQuestions.sort(() => 0.5 - Math.random());
+
+    for (const q of allOtherQuestions) {
+      if (result.length < numQuestions && !used.has(q.question)) {
+        result.push(q);
+        used.add(q.question);
+      }
+    }
+  }
+
+  // Fallback of the fallback: if somehow they asked for more questions than exist in all banks, 
+  // we just have to duplicate the base ones.
+  while (result.length < numQuestions) {
+    result.push(baseQuestions[result.length % baseQuestions.length]);
+  }
+
+  return result;
 }
 
 // ─────────────────────────────────────────────────

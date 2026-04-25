@@ -1,7 +1,9 @@
-import { useEffect, useState } from 'react';
+import React, { useEffect, useState, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Trophy, RefreshCcw, List, Swords, Crown, Shield } from 'lucide-react';
 import { socket } from '../socket';
+import { supabase } from '../supabase';
+import { API_BASE } from '../lib/api';
 
 export default function Result() {
   const navigate = useNavigate();
@@ -17,6 +19,8 @@ export default function Result() {
 
   // Derived state to avoid cascading renders and lint errors
   const outcome = score > opponentScore ? 'win' : (score < opponentScore ? 'loss' : 'draw');
+  
+  const hasSaved = React.useRef(false);
 
   useEffect(() => {
     // REAL-TIME SYNC: Listen for opponent finishing or scoring while we are on this page
@@ -25,21 +29,36 @@ export default function Result() {
       sessionStorage.setItem('opponentStats', JSON.stringify({ score: data.score, answered: data.answered }));
     });
 
-    // Save to leaderboard
-    if (score && username !== 'Unknown') {
-      fetch('http://localhost:5000/api/leaderboard/update', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          username: username,
-          topic: roomData?.topic || 'General Knowledge',
-          score: score
-        })
-      }).catch(err => console.error('Failed to save score:', err));
-    }
+    // Save to leaderboard with outcome and user_id
+    const saveBattleResult = async () => {
+      if (hasSaved.current) return;
+      if (score !== null && score !== undefined && username !== 'Unknown') {
+        hasSaved.current = true;
+        const { data: { user } } = await supabase?.auth.getUser() || { data: {} };
+        
+        fetch(`${API_BASE}/api/leaderboard/update`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            username: username,
+            topic: roomData?.topic || 'General Knowledge',
+            score: score,
+            outcome: score > opponentScore ? 'win' : score < opponentScore ? 'loss' : 'draw',
+            opponent: opponentName,
+            user_id: user?.email || user?.id // Link to logged in account
+          })
+        }).catch(err => {
+            console.error('Failed to save score:', err);
+            hasSaved.current = false;
+        });
+      }
+    };
+
+    saveBattleResult();
+
 
     return () => socket.off('opponent_update');
-  }, [score, username, roomData]);
+  }, [score, username, roomData, opponentScore, opponentName]);
 
   const handlePlayAgain = () => {
     sessionStorage.removeItem('roomData');
@@ -47,7 +66,7 @@ export default function Result() {
     sessionStorage.removeItem('opponentStats');
     sessionStorage.removeItem('chatHistory');
     socket.disconnect();
-    navigate('/');
+    navigate('/home');
   };
 
   const outcomeConfig = {

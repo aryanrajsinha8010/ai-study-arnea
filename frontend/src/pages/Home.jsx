@@ -1,13 +1,29 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Swords, BookOpen } from 'lucide-react';
+import { Swords, BookOpen, User } from 'lucide-react';
 import { socket } from '../socket';
+import { supabase } from '../supabase';
 
 export default function Home() {
   const [username, setUsername] = useState('');
   const [topic, setTopic] = useState('');
   const [showDropdown, setShowDropdown] = useState(false);
+  const [authUser, setAuthUser] = useState(null);
+  const [matchType, setMatchType] = useState('rapid'); // rapid or custom
+  const [customCount, setCustomCount] = useState(5); // default 5 for custom
   const navigate = useNavigate();
+
+  useEffect(() => {
+    supabase?.auth.getUser().then(({ data }) => {
+      if (data?.user) {
+        setAuthUser(data.user);
+        // Prioritize Full Name as requested
+        const name = data.user.user_metadata?.full_name || data.user.email?.split('@')[0] || '';
+        setUsername(name);
+      }
+    });
+
+  }, []);
 
   // DISK-LESS DATASET: Hundreds of subjects embedded directly in the frontend for instant, zero-API filtering
   const scholarDomains = useMemo(() => [
@@ -71,20 +87,39 @@ export default function Home() {
     e.preventDefault();
     if (!username || !topic) return;
 
+    // Store match preferences
+    sessionStorage.setItem('username', username);
+    sessionStorage.setItem('topic', topic);
+    sessionStorage.setItem('matchType', matchType);
+    sessionStorage.setItem('numQuestions', matchType === 'custom' ? customCount : 5);
+
     // Connect socket if not connected
     if (!socket.connected) {
       socket.connect();
     }
-
-    // Set user info locally
-    sessionStorage.setItem('username', username);
-    sessionStorage.setItem('topic', topic);
 
     navigate('/matchmaking');
   };
 
   return (
     <div className="w-full max-w-lg animate-slide-up mx-auto">
+      {/* Profile / back link */}
+      <div className="flex justify-between items-center mb-6">
+        <button onClick={() => navigate('/')} className="text-on-surface-variant hover:text-primary text-xs font-sans uppercase tracking-widest transition-colors">
+          ← Landing
+        </button>
+        {authUser ? (
+          <button onClick={() => navigate('/profile')} className="flex items-center gap-2 text-xs font-sans text-on-surface-variant hover:text-primary transition-colors">
+            <img src={authUser.user_metadata?.avatar_url || ''} alt="" className="w-6 h-6 rounded-full" />
+            <span>{authUser.user_metadata?.full_name?.split(' ')[0] || 'Profile'}</span>
+            <User size={14} />
+          </button>
+        ) : (
+          <button onClick={() => navigate('/')} className="text-on-surface-variant hover:text-primary text-xs font-sans uppercase tracking-widest transition-colors">
+            Sign In →
+          </button>
+        )}
+      </div>
       <div className="text-center mb-10">
         <div className="mb-6">
           <BookOpen strokeWidth={1} size={56} className="text-primary mx-auto opacity-80" />
@@ -128,13 +163,16 @@ export default function Home() {
           </label>
           <input
             type="text"
-            className="w-full bg-transparent border-b border-outline-variant/50 px-0 py-3 text-on-surface font-body text-lg focus:border-primary focus:ring-0 outline-none transition-colors placeholder:text-surface-container-highest placeholder:italic"
+            className={`w-full bg-transparent border-b border-outline-variant/50 px-0 py-3 text-on-surface font-body text-lg focus:border-primary focus:ring-0 outline-none transition-colors placeholder:text-surface-container-highest placeholder:italic ${authUser ? 'opacity-50 cursor-not-allowed italic' : ''}`}
             placeholder="e.g., Scholar Vane"
             value={username}
             onChange={(e) => setUsername(e.target.value)}
+            disabled={!!authUser}
             required
           />
+          {authUser && <p className="text-[10px] font-sans text-primary/60 mt-1 italic">Identity managed in Profile</p>}
         </div>
+
 
         <div className="space-y-2 relative">
           <label className="font-sans text-xs font-semibold tracking-wider text-on-surface uppercase flex items-center gap-2">
@@ -168,6 +206,19 @@ export default function Home() {
           {showDropdown && topic.trim().length >= 2 && filteredTopics.length === 0 && (
             <div className="absolute z-50 w-full mt-2 bg-primary/10 border border-primary/30 rounded-sm shadow-xl px-4 py-3 text-on-surface font-body text-sm italic">
               A unique domain. The Arena will adapt to your choice.
+            </div>
+          )}
+        </div>
+
+        <div className="space-y-4">
+          <div className="flex gap-4">
+            <button type="button" onClick={() => setMatchType('rapid')} className={`flex-1 py-2 text-xs font-bold uppercase tracking-widest border ${matchType === 'rapid' ? 'bg-primary text-on-primary border-primary' : 'border-outline-variant text-on-surface-variant'}`}>Rapid</button>
+            <button type="button" onClick={() => setMatchType('custom')} className={`flex-1 py-2 text-xs font-bold uppercase tracking-widest border ${matchType === 'custom' ? 'bg-primary text-on-primary border-primary' : 'border-outline-variant text-on-surface-variant'}`}>Custom</button>
+          </div>
+          {matchType === 'custom' && (
+            <div className="flex items-center gap-4">
+              <label className="text-xs text-on-surface-variant">Questions:</label>
+              <input type="number" min="3" max="20" value={customCount} onChange={(e) => setCustomCount(e.target.value)} className="w-16 bg-transparent border-b border-outline-variant text-on-surface text-center" />
             </div>
           )}
         </div>

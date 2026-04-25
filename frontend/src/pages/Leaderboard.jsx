@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Trophy, Home, Loader2 } from 'lucide-react';
+import { API_BASE } from '../lib/api';
 
 export default function Leaderboard() {
   const navigate = useNavigate();
@@ -9,7 +10,7 @@ export default function Leaderboard() {
   const [error, setError] = useState(false);
 
   useEffect(() => {
-    fetch('http://localhost:5000/api/leaderboard')
+    fetch(`${API_BASE}/api/leaderboard`)
       .then(res => res.json())
       .then(data => {
         // Guard: API must return an array

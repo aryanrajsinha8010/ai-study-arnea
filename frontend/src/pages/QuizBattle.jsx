@@ -1,6 +1,6 @@
-import { useEffect, useState, useCallback } from 'react';
-import { useNavigate } from 'react-router-dom';
-import { BrainCircuit, Loader2, CheckCircle2, XCircle } from 'lucide-react';
+import { useEffect, useState, useCallback, useRef } from 'react';
+import { useNavigate, useBlocker } from 'react-router-dom';
+import { BrainCircuit, Loader2, CheckCircle2, XCircle, UserX } from 'lucide-react';
 import { socket } from '../socket';
 
 export default function QuizBattle() {
@@ -24,6 +24,29 @@ export default function QuizBattle() {
     const delay = startAt - Date.now();
     return delay > 0 ? Math.ceil(delay / 1000) : null;
   });
+  
+  const isConcluded = useRef(false);
+  const [opponentAbandoned, setOpponentAbandoned] = useState(false);
+
+  const blocker = useBlocker(({ currentLocation, nextLocation }) => {
+    if (nextLocation.pathname === '/result') return false;
+    return currentLocation.pathname !== nextLocation.pathname;
+  });
+
+  useEffect(() => {
+    if (blocker.state === 'blocked') {
+      const wantToQuit = window.confirm("Are you sure you want to quit? This will forfeit the match and terminate the session.");
+      if (wantToQuit) {
+        if (roomData?.roomId && !isConcluded.current) {
+           socket.emit('abandon_battle', { roomId: roomData.roomId });
+        }
+        blocker.proceed();
+      } else {
+        blocker.reset();
+      }
+    }
+  }, [blocker, roomData]);
+
 
   // 1. Wrap in useCallback to avoid changing dependencies
   const handleAnswer = useCallback((option) => {
@@ -95,8 +118,10 @@ export default function QuizBattle() {
       }, delay);
       return () => clearTimeout(timer);
     } else {
-      setLoading(false);
-      setSyncCountdown(null);
+      setTimeout(() => {
+        setLoading(false);
+        setSyncCountdown(null);
+      }, 0);
     }
   }, [questions]);
 
@@ -108,20 +133,32 @@ export default function QuizBattle() {
     };
 
     const handleBattleConcluded = (data) => {
+      isConcluded.current = true;
       if (data?.results) {
         sessionStorage.setItem('battleResults', JSON.stringify(data.results));
       }
       navigate('/result');
     };
 
+    const handleOpponentAbandoned = () => {
+       setOpponentAbandoned(true);
+    };
+
     socket.on('opponent_update', handleOpponentUpdate);
     socket.on('battle_concluded', handleBattleConcluded);
+    socket.on('opponent_abandoned', handleOpponentAbandoned);
 
     return () => {
       socket.off('opponent_update', handleOpponentUpdate);
       socket.off('battle_concluded', handleBattleConcluded);
+      socket.off('opponent_abandoned', handleOpponentAbandoned);
+      
+      // Cleanup: If the user hits "Back" button avoiding natural conclusion
+      if (!isConcluded.current && roomData?.roomId) {
+         socket.emit('abandon_battle', { roomId: roomData.roomId });
+      }
     };
-  }, [navigate]);
+  }, [navigate, roomData]);
 
 
   useEffect(() => {
@@ -182,10 +219,20 @@ export default function QuizBattle() {
       {/* Waiting Overlay */}
       {waitingForConclude && (
         <div className="absolute inset-0 z-50 flex flex-col items-center justify-center bg-surface/60 backdrop-blur-sm">
-          <div className="bg-surface-container border border-primary/50 p-8 rounded-sm shadow-2xl text-center">
-             <Loader2 size={48} className="animate-spin text-primary mx-auto mb-6" />
-             <h3 className="font-serif text-2xl font-bold text-on-surface mb-2">Finalizing Archives</h3>
-             <p className="font-body text-on-surface-variant italic">Waiting for your rival to finish their trial...</p>
+          <div className="bg-surface-container border border-primary/50 p-8 rounded-sm shadow-2xl text-center max-w-sm">
+             {opponentAbandoned ? (
+                <>
+                  <UserX size={48} className="text-secondary mx-auto mb-6" />
+                  <h3 className="font-serif text-2xl font-bold text-on-surface mb-2">Opponent Fled</h3>
+                  <p className="font-body text-on-surface-variant italic mb-6">You win by default. The system is finalizing your victory...</p>
+                </>
+             ) : (
+                <>
+                  <Loader2 size={48} className="animate-spin text-primary mx-auto mb-6" />
+                  <h3 className="font-serif text-2xl font-bold text-on-surface mb-2">Finalizing Archives</h3>
+                  <p className="font-body text-on-surface-variant italic">Waiting for your rival to finish their trial...</p>
+                </>
+             )}
              <div className="mt-6 flex justify-center gap-4 border-t border-outline-variant/30 pt-4">
                 <div className="text-center">
                   <div className="text-[10px] uppercase tracking-tighter text-outline mb-1">Your Score</div>
@@ -243,10 +290,34 @@ export default function QuizBattle() {
         />
       </div>
 
-      {/* Question */}
-      <h2 className="font-serif text-3xl font-medium mb-12 leading-relaxed text-on-surface tracking-[-0.01em]">
-        {question.question}
-      </h2>
+      {(() => {
+        let metadata = null;
+        let displayQuestion = question.question || '';
+        
+        // Extract metadata if formatted like "[Easy] Mathematics (Functions): Question text"
+        const metaMatch = displayQuestion.match(/^\[(.*?)\](.*?):\s*(.*)$/);
+        if (metaMatch) {
+          metadata = `${metaMatch[1]} • ${metaMatch[2].trim()}`;
+          displayQuestion = metaMatch[3];
+        }
+        
+        // Clean trailing "(Question X)" if present as it is redundant
+        displayQuestion = displayQuestion.replace(/\s*\(Question\s*\d+\)\s*$/i, '');
+
+        return (
+          <div className="mb-12">
+            {metadata && (
+              <div className="font-sans text-xs font-bold uppercase tracking-widest text-primary mb-3 opacity-90 flex items-center gap-2">
+                <span className="w-1.5 h-1.5 rounded-full bg-primary animate-pulse"></span>
+                {metadata}
+              </div>
+            )}
+            <h2 className="font-serif text-3xl font-medium leading-relaxed text-on-surface tracking-[-0.01em]">
+              {displayQuestion}
+            </h2>
+          </div>
+        );
+      })()}
 
       {/* Options */}
       <div className="space-y-4">
